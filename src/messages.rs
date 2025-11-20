@@ -124,7 +124,7 @@ pub trait Request: std::fmt::Debug {
 /// let mhz: f64 = Frequency::from_mhz(132.600).into();
 /// assert_eq!(mhz, 132.600f64);
 /// ```
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct Frequency(pub u64);
 
 impl Frequency {
@@ -193,6 +193,14 @@ impl Frequency {
     /// Returns the frequency in Megahertz (MHz).
     pub fn as_mhz(&self) -> f64 {
         self.0 as f64 / 1_000_000.0f64
+    }
+}
+
+impl std::fmt::Debug for Frequency {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("Frequency")
+            .field(&format_args!("{:.3} MHz", self.as_mhz()))
+            .finish()
     }
 }
 
