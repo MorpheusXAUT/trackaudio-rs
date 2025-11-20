@@ -3,7 +3,16 @@ name = "trackaudio"
 version = "0.1.0"
 edition = "2024"
 license = "Apache-2.0 OR MIT"
-rust-version = "1.85.0"
+rust-version = "1.85"
+repository = "https://github.com/MorpheusXAUT/trackaudio-rs"
+keywords = ["vatsim", "trackaudio"]
+categories = ["api-bindings", "asynchronous", "network-programming", "web-programming::websocket"]
+readme = "README.md"
+description = "A high-level async client for the TrackAudio WebSocket API, enabling programmatic control, automation, and custom integrations for VATSIM voice communication."
+exclude = [
+    ".github/",
+    ".idea/",
+]
 
 [features]
 default = ["tracing"]
