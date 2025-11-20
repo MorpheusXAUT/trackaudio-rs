@@ -1,0 +1,63 @@
+name: ci.yml
+on:
+  push:
+    branches: [ main ]
+    paths: &rust_paths
+      - '**/*.rs'
+      - 'Cargo.toml'
+      - '.github/workflows/ci.yml'
+  pull_request:
+    branches: [ main ]
+    paths: *rust_paths
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        rust: [ '1.85.0', 'stable' ]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Rust toolchain (${{ matrix.rust }})
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ matrix.rust }}
+          components: clippy, rust-docs, rustfmt
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      # Only enforce formatting on stable to avoid rustfmt differences
+      - name: Format
+        if: matrix.rust == 'stable'
+        run: cargo fmt --all -- --check
+
+      # Only enforce checks on stable to avoid version differences
+      - name: Check
+        if: matrix.rust == 'stable'
+        run: cargo check --all-targets --all-features
+
+      # Only enforce clippy on stable to avoid version differences
+      - name: Clippy
+        if: matrix.rust == 'stable'
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+      # Only build docs on stable to avoid version differences
+      - name: Docs
+        if: matrix.rust == 'stable'
+        run: cargo doc --all-features --no-deps
+
+      - name: Tests
+        run: cargo test --all-targets --all-features
