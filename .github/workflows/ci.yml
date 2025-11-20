@@ -5,6 +5,7 @@ on:
     paths: &rust_paths
       - '**/*.rs'
       - 'Cargo.toml'
+      - 'deny.toml'
       - '.github/workflows/ci.yml'
   pull_request:
     branches: [ main ]
@@ -18,6 +19,27 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  cargo-deny:
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        checks:
+          - 'advisories'
+          - 'bans licenses sources'
+
+    # prevent a sudden announcement of a new advisory from failing CI
+    continue-on-error: ${{ matrix.checks == 'advisories' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: cargo deny
+        uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          arguments: --all-features
+          command: check ${{ matrix.checks }}
+
   check:
     runs-on: ubuntu-latest
 
