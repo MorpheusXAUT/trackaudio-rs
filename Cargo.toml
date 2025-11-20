@@ -10,7 +10,9 @@ categories = ["api-bindings", "asynchronous", "network-programming", "web-progra
 readme = "README.md"
 description = "A high-level async client for the TrackAudio WebSocket API, enabling programmatic control, automation, and custom integrations for VATSIM voice communication."
 exclude = [
+    "examples/",
     ".github/",
+    ".gitignore",
     ".idea/",
 ]
 
