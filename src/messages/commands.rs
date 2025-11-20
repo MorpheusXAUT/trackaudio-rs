@@ -33,7 +33,8 @@
 //! # External documentation
 //!
 //! For more details on TrackAudio's command protocol, see the
-//! [SDK documentation](https://github.com/pierr3/TrackAudio/wiki/SDK-documentation#incoming-messages).
+//! [SDK documentation](https://github.com/pierr3/TrackAudio/wiki/SDK-documentation#incoming-messages)
+//! as well as the [respective implementation](https://github.com/pierr3/TrackAudio/blob/main/backend/src/sdk.cpp).
 
 use crate::messages::Request;
 use crate::messages::events::StationState;
@@ -94,19 +95,19 @@ pub enum Command {
     #[serde(rename = "kChangeStationVolume")]
     ChangeStationVolume(ChangeStationVolume),
 
-    /// Adjust the main output volume.
+    /// Adjust the main volume.
     ///
-    /// Changes the main volume level for all audio output.
-    /// TrackAudio emits [`Event::MainOutputVolumeChange`] with the updated volume.
-    #[serde(rename = "kChangeMainOutputVolume")]
-    ChangeMainOutputVolume(ChangeMainOutputVolume),
+    /// Changes the main volume level for all audio outputs.
+    /// TrackAudio emits [`Event::MainVolumeChange`] with the updated volume.
+    #[serde(rename = "kChangeMainVolume")]
+    ChangeMainVolume(ChangeMainVolume),
 
-    /// Request the current main output volume.
+    /// Request the current main volume.
     ///
     /// Queries TrackAudio for the current main volume level.
-    /// TrackAudio emits [`Event::MainOutputVolumeChange`] with the updated volume.
-    #[serde(rename = "kGetMainOutputVolume")]
-    GetMainOutputVolume,
+    /// TrackAudio emits [`Event::MainVolumeChange`] with the updated volume.
+    #[serde(rename = "kGetMainVolume")]
+    GetMainVolume,
 
     /// Request the state of a specific station.
     ///
@@ -121,6 +122,13 @@ pub enum Command {
     /// TrackAudio emits [`Event::StationStates`] with all station data.
     #[serde(rename = "kGetStationStates")]
     GetStationStates,
+
+    /// Request the current voice connection state.
+    ///
+    /// Queries whether the connection to the voice server is established.
+    /// TrackAudio emits [`Event::VoiceConnectedState`] with the current state.
+    #[serde(rename = "kGetVoiceConnectedState")]
+    GetVoiceConnectedState,
 }
 
 /// Payload for adding a new station.
@@ -161,7 +169,11 @@ impl Request for AddStation {
             _ => return None,
         };
         match event {
-            Event::StationStateUpdate(state) if &state.callsign == callsign => Some(state.clone()),
+            Event::StationStateUpdate(state)
+                if state.callsign.as_ref().is_some_and(|c| c == callsign) =>
+            {
+                Some(state.clone())
+            }
             _ => None,
         }
     }
@@ -187,7 +199,7 @@ impl Request for AddStation {
 ///     tx: Some(BoolOrToggle::Bool(true)), // enable TX
 ///     xca: Some(BoolOrToggle::Bool(false)), // disable XCA
 ///     is_output_muted: None,
-///     headset: Some(BoolOrToggle::Toggle), // toggle headset output
+///     headset: Some(BoolOrToggle::Toggle), // toggle headset/speaker output
 /// };
 /// ```
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -212,7 +224,8 @@ pub struct SetStationState {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub xca: Option<BoolOrToggle>,
 
-    /// Whether to output audio to the configured headset device.
+    /// Whether to route audio to the headset audio device only (`true`) or output to both
+    /// speaker and headset (`false`) on this frequency.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub headset: Option<BoolOrToggle>,
 }
@@ -315,44 +328,44 @@ impl Request for ChangeStationVolume {
     }
 }
 
-/// Payload for adjusting the main output volume.
+/// Payload for adjusting the main volume.
 ///
 /// The volume change is relative to the current main volume level.
 ///
 /// This command implements the [`Request`] trait and can be used in a request-response pattern.
 ///
 /// Furthermore, the [`TrackAudioApi`](crate::TrackAudioApi) provides a convenience wrapper
-/// [`change_main_output_volume`](crate::TrackAudioApi::change_main_output_volume), which can be
-/// used to easily change the main output volume and await the associated response from TrackAudio.
+/// [`change_main_volume`](crate::TrackAudioApi::change_main_volume), which can be
+/// used to easily change the main volume and await the associated response from TrackAudio.
 ///
 /// # Examples
 ///
 /// ```rust
-/// use trackaudio::messages::commands::ChangeMainOutputVolume;
+/// use trackaudio::messages::commands::ChangeMainVolume;
 ///
-/// let cmd = ChangeMainOutputVolume {
+/// let cmd = ChangeMainVolume {
 ///     amount: 50, // 50% volume increase
 /// };
 ///
-/// let cmd = ChangeMainOutputVolume {
+/// let cmd = ChangeMainVolume {
 ///     amount: -100, // -100% volume increase (effectively mute)
 /// };
 ///
-/// let cmd = ChangeMainOutputVolume::new(127);
+/// let cmd = ChangeMainVolume::new(127);
 /// assert_eq!(cmd.amount, 100); // clamped to 100
 ///
-/// let cmd = ChangeMainOutputVolume::new(-127);
+/// let cmd = ChangeMainVolume::new(-127);
 /// assert_eq!(cmd.amount, -100); // clamped to -100
 /// ```
 #[derive(Debug, Clone, PartialEq, Serialize)]
-pub struct ChangeMainOutputVolume {
+pub struct ChangeMainVolume {
     /// Amount to adjust the volume by, in the range -100..=100.
     ///
     /// This is added to the current volume. The resulting volume will be clamped to the range 0..=100.
     pub amount: i8,
 }
 
-impl ChangeMainOutputVolume {
+impl ChangeMainVolume {
     pub fn new(amount: i8) -> Self {
         Self {
             amount: amount.clamp(-100, 100),
@@ -360,16 +373,16 @@ impl ChangeMainOutputVolume {
     }
 }
 
-impl Request for ChangeMainOutputVolume {
+impl Request for ChangeMainVolume {
     type Response = f32;
 
     fn into_command(self) -> Command {
-        Command::ChangeMainOutputVolume(self)
+        Command::ChangeMainVolume(self)
     }
 
     fn extract(event: &Event, _cmd: &Command) -> Option<Self::Response> {
         match event {
-            Event::MainOutputVolumeChange(change) => Some(change.volume),
+            Event::MainVolumeChange(change) => Some(change.volume),
             _ => None,
         }
     }
@@ -411,7 +424,11 @@ impl Request for GetStationState {
             _ => return None,
         };
         match event {
-            Event::StationStateUpdate(state) if &state.callsign == callsign => Some(state.clone()),
+            Event::StationStateUpdate(state)
+                if state.callsign.as_ref().is_some_and(|c| c == callsign) =>
+            {
+                Some(state.clone())
+            }
             _ => None,
         }
     }
@@ -453,6 +470,41 @@ impl Request for GetStationStates {
                     .map(|s| s.value.clone())
                     .collect::<_>(),
             ),
+            _ => None,
+        }
+    }
+}
+
+/// Payload for requesting voice connection state.
+///
+/// This is a unit struct as the command requires no additional data.
+///
+/// This command implements the [`Request`] trait and can be used in a request-response pattern.
+///
+/// Furthermore, the [`TrackAudioApi`](crate::TrackAudioApi) provides a convenience wrapper
+/// [`get_voice_connected_state`](crate::TrackAudioApi::get_voice_connected_state), which can be used
+/// to easily request the current voice connection state and await the associated response from TrackAudio.
+///
+/// # Examples
+///
+/// ```rust
+/// use trackaudio::messages::commands::GetVoiceConnectedState;
+///
+/// let cmd = GetVoiceConnectedState;
+/// ```
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct GetVoiceConnectedState;
+
+impl Request for GetVoiceConnectedState {
+    type Response = bool;
+
+    fn into_command(self) -> Command {
+        Command::GetVoiceConnectedState
+    }
+
+    fn extract(event: &Event, _cmd: &Command) -> Option<Self::Response> {
+        match event {
+            Event::VoiceConnectedState(state) => Some(state.connected),
             _ => None,
         }
     }

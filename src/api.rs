@@ -1,5 +1,6 @@
 use crate::messages::commands::{
-    AddStation, ChangeMainOutputVolume, ChangeStationVolume, GetStationState, GetStationStates,
+    AddStation, ChangeMainVolume, ChangeStationVolume, GetStationState, GetStationStates,
+    GetVoiceConnectedState,
 };
 use crate::messages::events::StationState;
 use crate::{Command, Event, TrackAudioClient};
@@ -138,10 +139,10 @@ impl<'a> TrackAudioApi<'a> {
             .await
     }
 
-    /// Changes the volume of the main output and returns its updated state.
+    /// Changes the main volume and returns its updated state.
     ///
-    /// This function sends a [`Command::ChangeMainOutputVolume`] command to modify the volume of
-    /// the main audio output. It waits for a corresponding [`Event::StationStateUpdate`] event
+    /// This function sends a [`Command::ChangeMainVolume`] command to modify the volume of
+    /// the main audio output. It waits for a corresponding [`Event::MainVolumeChange`] event
     /// and retrieves the updated main output volume.
     ///
     /// # Parameters
@@ -159,13 +160,13 @@ impl<'a> TrackAudioApi<'a> {
     /// - [`TrackAudioError::Send`](crate::TrackAudioError::Send): If an error occurs while sending the command.
     /// - [`TrackAudioError::Receive`](crate::TrackAudioError::Receive): If an error occurs while receiving events.
     #[cfg_attr(feature = "tracing", tracing::instrument(skip(self), err))]
-    pub async fn change_main_output_volume(
+    pub async fn change_main_volume(
         &self,
         amount: i8,
         timeout: Option<Duration>,
     ) -> crate::Result<f32> {
         self.client
-            .request(ChangeMainOutputVolume::new(amount), timeout)
+            .request(ChangeMainVolume::new(amount), timeout)
             .await
     }
 
@@ -229,5 +230,30 @@ impl<'a> TrackAudioApi<'a> {
         timeout: Option<Duration>,
     ) -> crate::Result<Vec<StationState>> {
         self.client.request(GetStationStates, timeout).await
+    }
+
+    /// Retrieves the current voice connection state.
+    ///
+    /// This function sends a [`Command::GetVoiceConnectedState`] command to request the current
+    /// voice connection state. It waits for a corresponding [`Event::VoiceConnectedState`] event
+    /// and returns the current state.
+    ///
+    /// # Parameters
+    /// - `timeout`: An optional `Duration` to specify the maximum time to wait
+    ///   for the response. If `None`, the function will wait indefinitely.
+    ///
+    /// # Returns
+    /// - `Ok(bool)`: The current voice connection state if the operation was successful.
+    /// - `Err(TrackAudioError)`: An error if the operation failed or exceeded the provided timeout.
+    ///
+    /// # Errors
+    /// - [`TrackAudioError::Timeout`](crate::TrackAudioError::Timeout): If the operation times out.
+    /// - [`TrackAudioError::Send`](crate::TrackAudioError::Send): If an error occurs while sending the command.
+    /// - [`TrackAudioError::Receive`](crate::TrackAudioError::Receive): If an error occurs while receiving events.
+    pub async fn get_voice_connected_state(
+        &self,
+        timeout: Option<Duration>,
+    ) -> crate::Result<bool> {
+        self.client.request(GetVoiceConnectedState, timeout).await
     }
 }

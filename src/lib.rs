@@ -62,9 +62,9 @@
 //!     let station = api.add_station("LOVV_CTR", Some(Duration::from_secs(5))).await?;
 //!     println!("Added station: {station:?}");
 //!
-//!     // Change the main output volume
-//!     let volume = api.change_main_output_volume(-20, None).await?;
-//!     println!("Changed main output volume to {volume}");
+//!     // Change the main volume
+//!     let volume = api.change_main_volume(-20, None).await?;
+//!     println!("Changed main volume to {volume}");
 //!
 //!     Ok(())
 //! }

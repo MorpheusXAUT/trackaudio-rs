@@ -13,7 +13,8 @@
 //! # External documentation
 //!
 //! For more details on TrackAudio's event protocol, see the
-//! [SDK documentation](https://github.com/pierr3/TrackAudio/wiki/SDK-documentation#outgoing-messages).
+//! [SDK documentation](https://github.com/pierr3/TrackAudio/wiki/SDK-documentation#outgoing-messages)
+//! as well as the [respective implementation](https://github.com/pierr3/TrackAudio/blob/main/backend/include/sdkWebsocketMessage.hpp).
 
 use crate::{Command, Frequency};
 use serde::Deserialize;
@@ -45,6 +46,13 @@ pub enum Event {
     #[serde(rename = "kVoiceConnectedState")]
     VoiceConnectedState(VoiceConnectedState),
 
+    /// Station added.
+    ///
+    /// Emitted when a new station is successfully added to TrackAudio, e.g., as a response to
+    /// [`Command::AddStation`].
+    #[serde(rename = "kStationAdded")]
+    StationAdded(StationAdded),
+
     /// A (monitored) station's state has been updated.
     ///
     /// Emitted when any property of a station changes (e.g., rx/tx/xc state, volume, etc.), or
@@ -52,6 +60,12 @@ pub enum Event {
     /// [`Command::AddStation`], including the info whether the station was found.
     #[serde(rename = "kStationStateUpdate")]
     StationStateUpdate(StationState),
+
+    /// An (unassociated) Frequency has been removed.
+    ///
+    /// Emitted when a manually tuned frequency (without a station) is removed from TrackAudio.
+    #[serde(rename = "kFrequencyRemoved")]
+    FrequencyRemoved(FrequencyRemoved),
 
     /// Full state snapshot of all stations.
     ///
@@ -87,12 +101,12 @@ pub enum Event {
     #[serde(rename = "kRxEnd")]
     RxEnd(RxEnd),
 
-    /// The main output volume level changed.
+    /// The main volume level changed.
     ///
-    /// Emitted when the user adjusts the master volume (either by using the volume slider in the
-    /// client or as a response to [`Command::ChangeMainOutputVolume`]).
-    #[serde(rename = "kMainOutputVolumeChange")]
-    MainOutputVolumeChange(MainOutputVolumeChange),
+    /// Emitted when the user adjusts the main volume (either by using the volume slider in the
+    /// client or as a response to [`Command::ChangeMainVolume`]).
+    #[serde(rename = "kMainVolumeChange")]
+    MainVolumeChange(MainVolumeChange),
 
     /// Frequency state update (deprecated).
     ///
@@ -131,6 +145,20 @@ pub struct VoiceConnectedState {
     pub connected: bool,
 }
 
+/// Information about a newly added station.
+///
+/// Indicates a station was successfully added to TrackAudio.
+///
+/// Emitted in response to [`Command::AddStation`].
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct StationAdded {
+    /// The callsign of the station.
+    pub callsign: String,
+
+    /// The frequency the station is tuned to.
+    pub frequency: Frequency,
+}
+
 /// Station state information.
 ///
 /// Contains the current state of a monitored radio station, including its frequency,
@@ -142,16 +170,28 @@ pub struct VoiceConnectedState {
 #[serde(rename_all = "camelCase")]
 pub struct StationState {
     /// The callsign of the station.
-    pub callsign: String,
+    ///
+    /// When adding a station, this will be the callsign added (as for most other requests).
+    ///
+    /// When manually tuning a frequency (not available via API), `callsign` will be `None`. All
+    /// later updates will have the callsign `Some("MANUAL")` for manually tuned frequencies.
+    pub callsign: Option<String>,
 
     /// Whether the station is available (found in the VATSIM audio database). If `false`, all
     /// other information will be `None`.
     pub is_available: bool,
 
     /// The frequency the station is tuned to.
+    ///
+    /// When adding a station, this value is only available if the station was found and
+    /// successfully added.
+    ///
+    /// When manually tuning a frequency (not available via API), this will be the frequency added,
+    /// but its `callsign` will be `None`.
     pub frequency: Option<Frequency>,
 
-    /// Whether the station's audio is routed to the headset device.
+    /// Whether the station is routed to the headset audio device only (`true`) or output to both
+    /// speaker and headset (`false`).
     pub headset: Option<bool>,
 
     /// Whether the station's audio output is muted.
@@ -171,6 +211,13 @@ pub struct StationState {
 
     /// Whether the station has cross-couple across (XCA) enabled.
     pub xca: Option<bool>,
+}
+
+/// Information about a manually tuned frequency that was removed.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct FrequencyRemoved {
+    /// The frequency that was removed.
+    pub frequency: Frequency,
 }
 
 /// Envelope structure for station state updates.
@@ -240,14 +287,14 @@ pub struct RxEnd {
     pub active_transmitters: Option<Vec<String>>,
 }
 
-/// Main output volume change event payload.
+/// Main volume change event payload.
 ///
-/// Indicates that the master output volume level has been adjusted.
+/// Indicates that the main volume level has been adjusted.
 ///
-/// Emitted in response to [`Command::ChangeMainOutputVolume`].
+/// Emitted in response to [`Command::ChangeMainVolume`].
 #[derive(Debug, Clone, PartialEq, Deserialize)]
-pub struct MainOutputVolumeChange {
-    /// The main audio output volume level in the range 0..=100.
+pub struct MainVolumeChange {
+    /// The main audio volume level in the range 0..=100.
     pub volume: f32,
 }
 

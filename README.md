@@ -72,8 +72,8 @@ async fn main() -> trackaudio::Result<()> {
     let station = api.add_station("LOVV_CTR", Some(Duration::from_secs(5))).await?;
     println!("Added station: {station:?}");
 
-    // Change main output volume
-    let vol = api.change_main_output_volume(-20, None).await?;
+    // Change main volume
+    let vol = api.change_main_volume(-20, None).await?;
     println!("Volume changed to {vol}");
 
     Ok(())
