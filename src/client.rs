@@ -187,11 +187,12 @@ impl TrackAudioClient {
                     Ok(event) => {
                         if let Event::Client(ClientEvent::CommandSendFailed { command, error }) =
                             &event
-                            && command == &cmd
                         {
-                            #[cfg(feature = "tracing")]
-                            tracing::trace!(?cmd, ?event, "Command send failed");
-                            return Err(TrackAudioError::Send(error.to_string()));
+                            if command == &cmd {
+                                #[cfg(feature = "tracing")]
+                                tracing::trace!(?cmd, ?event, "Command send failed");
+                                return Err(TrackAudioError::Send(error.to_string()));
+                            }
                         }
 
                         if let Some(result) = filter(&event) {
