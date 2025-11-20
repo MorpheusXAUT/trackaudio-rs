@@ -1,0 +1,54 @@
+name: Release & Publish
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Target branch to prepare release from (leave empty for default behavior).'
+        required: false
+        default: ''
+        type: string
+
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    outputs:
+      release_created: ${{ steps.release.outputs.release_created }}
+
+    steps:
+      - uses: googleapis/release-please-action@v4.4.0
+        id: release
+        with:
+          config-file: .github/release-please-config.json
+          manifest-file: .github/.release-please-manifest.json
+          target-branch: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.ref != '' && github.event.inputs.ref || github.ref_name }}
+          token: ${{ secrets.RELEASE_PLEASE_PAT }}
+
+  publish-crate:
+    needs: release-please
+    if: needs.release-please.outputs.release_created == 'true'
+    runs-on: ubuntu-latest
+
+    environment: release
+
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Authenticate with crates.io (Trusted Publishing)
+        id: auth
+        uses: rust-lang/crates-io-auth-action@v1.0.3
+
+      - name: Publish to crates.io
+        run: cargo publish --verbose
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
