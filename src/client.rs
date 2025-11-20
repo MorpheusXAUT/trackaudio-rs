@@ -423,6 +423,7 @@ impl TrackAudioClient {
                                         reason: format!("Failed to send pong: {err}"),
                                     }
                                 );
+                                break;
                             }
                         }
                         Some(Ok(Message::Close(frame))) => {
