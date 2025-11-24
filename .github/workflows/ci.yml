@@ -33,7 +33,7 @@ jobs:
     continue-on-error: ${{ matrix.checks == 'advisories' }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
 
       - name: cargo deny
         uses: EmbarkStudios/cargo-deny-action@v2
@@ -51,7 +51,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
 
       - name: Rust toolchain (${{ matrix.rust }})
         uses: dtolnay/rust-toolchain@stable
