@@ -13,6 +13,11 @@ git_release_body = """
 [changelog]
 header = """# Changelog
 
+All notable changes to this project will be documented in this file.
+
+The format is based on [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
 ## [Unreleased]
 """
 
@@ -52,3 +57,23 @@ body = """
     {% endfor -%}
 {% endfor %}\n
 """
+
+commit_parsers = [
+    { message = "^feat", group = "<!-- 0 -->Features" },
+    { message = "^fix", group = "<!-- 1 -->Bug Fixes" },
+    { message = "^perf", group = "<!-- 2 -->Performance" },
+    { body = ".*security", group = "<!-- 3 -->Security" },
+    { message = "^revert", group = "<!-- 4 -->Revert" },
+    { message = "^docs?", group = "<!-- 5 -->Documentation" },
+    { message = "^build", skip = true },
+    { message = "^chore", skip = true },
+    { message = "^ci", skip = true },
+    { message = "^refactor", skip = true },
+    { message = "^style", skip = true },
+    { message = "^test", skip = true },
+]
+
+link_parsers = [
+    { pattern = "#(\\d+)", href = "{{ remote.link }}/issues/$1" },
+    { pattern = "RFC(\\d+)", text = "ietf-rfc$1", href = "https://datatracker.ietf.org/doc/html/rfc$1" },
+]
