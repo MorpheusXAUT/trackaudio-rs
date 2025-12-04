@@ -303,6 +303,9 @@
 //! - [TrackAudio SDK Documentation](https://github.com/pierr3/TrackAudio/wiki/SDK-documentation)
 //! - [VATSIM](https://vatsim.net/)
 
+#![warn(clippy::pedantic)]
+#![allow(clippy::doc_markdown)]
+
 mod api;
 mod client;
 mod config;
