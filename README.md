@@ -14,6 +14,7 @@ This crate provides a high-level, async API for controlling TrackAudio programma
 - 🔒 **Type-safe** – Strongly-typed commands and events with full deserialization
 - 🔄 **Request-response pattern** – High-level API for commands that expect responses
 - 📡 **Event streaming** – Subscribe to real-time events from TrackAudio
+- 🔌 **Automatic reconnection** – Resilient WebSocket connections with exponential backoff
 - 🧵 **Thread-safe** – Client can be safely shared across threads
 - 🔍 **Tracing support** – Optional integration with the `tracing` crate
 
@@ -101,10 +102,10 @@ async fn main() -> trackaudio::Result<()> {
 
     // Add a station
     let station = api.add_station("LOVV_CTR", Some(Duration::from_secs(5))).await?;
-    
+
     if station.is_available {
         println!("✓ Station available on {}", station.frequency.unwrap());
-        
+
         // Enable RX and TX on the station
         client.send(Command::SetStationState(SetStationState {
             frequency: station.frequency.unwrap(),
@@ -156,7 +157,7 @@ async fn main() -> trackaudio::Result<()> {
     let mut events = client.subscribe();
 
     println!("Monitoring radio activity...");
-    
+
     while let Ok(event) = events.recv().await {
         match event {
             Event::RxBegin(rx) => {
@@ -207,14 +208,14 @@ async fn main() -> trackaudio::Result<()> {
             Some(Duration::from_secs(5)),
         )
         .await?;
-    
+
     println!("Station: {:?}", station);
 
     // Request all station states
     let states = client
         .request(GetStationStates, Some(Duration::from_secs(5)))
         .await?;
-    
+
     println!("Total stations: {}", states.len());
 
     Ok(())
@@ -234,9 +235,58 @@ async fn main() -> trackaudio::Result<()> {
         .with_ping_interval(Duration::from_secs(10));  // Adjust keepalive
 
     let client = TrackAudioClient::connect(config).await?;
-    
+
     // Use client...
-    
+
+    Ok(())
+}
+```
+
+### Reconnection Configuration
+
+The client automatically reconnects on connection loss with exponential backoff:
+
+```rust
+use trackaudio::{TrackAudioClient, TrackAudioConfig, ConnectionState, ClientEvent, Event};
+use std::time::Duration;
+
+#[tokio::main]
+async fn main() -> trackaudio::Result<()> {
+    let config = TrackAudioConfig::default()
+        .with_auto_reconnect(true)             // Enabled by default
+        .with_max_reconnect_attempts(Some(10)) // None = infinite retries
+        .with_backoff_config(
+            Duration::from_secs(1),            // Initial backoff
+            Duration::from_secs(60),           // Max backoff
+            2.0,                               // Multiplier
+        );
+
+    let client = TrackAudioClient::connect(config).await?;
+
+    // Monitor connection state changes
+    let mut events = client.subscribe();
+    tokio::spawn(async move {
+        while let Ok(event) = events.recv().await {
+            if let Event::Client(ClientEvent::ConnectionStateChanged(state)) = event {
+                match state {
+                    ConnectionState::Disconnected { reason } => {
+                        println!("Disconnected: {reason}");
+                    }
+                    ConnectionState::Reconnecting { attempt, next_delay } => {
+                        println!("Reconnecting (attempt {attempt}) in {next_delay:?}...");
+                    }
+                    ConnectionState::Connected => {
+                        println!("Connected!");
+                    }
+                    _ => {}
+                }
+            }
+        }
+    });
+
+    // Manually trigger reconnection if needed
+    client.reconnect().await?;
+
     Ok(())
 }
 ```
@@ -262,10 +312,10 @@ The client supports flexible URL formats for connecting to TrackAudio:
 - **`Event`** – Events emitted by TrackAudio
 - **`Frequency`** – Radio frequency with convenient unit conversions
 
-
 ## Error Handling
 
 All operations return a `Result<T, TrackAudioError>`:
+
 ```rust
 use trackaudio::{TrackAudioClient, TrackAudioError};
 
@@ -291,8 +341,10 @@ match TrackAudioClient::connect_default().await {
 ## Features
 
 - **`tracing`** (enabled by default) – Integrate with the [`tracing`](https://docs.rs/tracing) crate for structured logging
+- **`reconnect-jitter`** (enabled by default) – Add jitter to reconnection backoff to prevent thundering herd
 
-To disable tracing:
+To disable default features:
+
 ```toml
 [dependencies]
 trackaudio = { version = "0.1", default-features = false }

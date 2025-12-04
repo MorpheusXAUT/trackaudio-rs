@@ -2,7 +2,7 @@ pub mod commands;
 pub mod events;
 
 pub use commands::Command;
-pub use events::{ClientEvent, Event};
+pub use events::{ClientEvent, ConnectionState, DisconnectReason, Event};
 
 use serde::{Deserialize, Serialize};
 

@@ -18,6 +18,7 @@
 
 use crate::{Command, Frequency};
 use serde::Deserialize;
+use std::time::Duration;
 
 /// Represents an event received from the TrackAudio instance.
 ///
@@ -343,17 +344,110 @@ pub struct FrequencyState {
     pub frequency: Frequency,
 }
 
+/// Reason for disconnection from TrackAudio.
+#[derive(Debug, Clone, PartialEq)]
+pub enum DisconnectReason {
+    /// User requested shutdown.
+    Shutdown,
+
+    /// User requested manual reconnection.
+    ManualReconnect,
+
+    /// Failed to send ping to keep connection alive.
+    PingFailed(String),
+
+    /// Failed to send command over WebSocket.
+    CommandSendFailed(String),
+
+    /// Failed to send pong response.
+    PongFailed(String),
+
+    /// WebSocket connection was closed by the peer.
+    ClosedByPeer {
+        /// Close frame code and reason, if provided.
+        code: Option<u16>,
+        reason: Option<String>,
+    },
+
+    /// WebSocket error occurred.
+    WebSocketError(String),
+
+    /// WebSocket stream ended unexpectedly.
+    StreamEnded,
+
+    /// Initial connection failed.
+    ConnectionFailed(String),
+}
+
+impl std::fmt::Display for DisconnectReason {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Shutdown => write!(f, "Shutdown requested"),
+            Self::ManualReconnect => write!(f, "Manual reconnection requested"),
+            Self::PingFailed(err) => write!(f, "Failed to send ping: {err}"),
+            Self::CommandSendFailed(err) => write!(f, "Failed to send command: {err}"),
+            Self::PongFailed(err) => write!(f, "Failed to send pong: {err}"),
+            Self::ClosedByPeer { code, reason } => {
+                write!(f, "WebSocket closed by peer")?;
+                if let Some(code) = code {
+                    write!(f, " (code: {code})")?;
+                }
+                if let Some(reason) = reason {
+                    if !reason.is_empty() {
+                        write!(f, ": {reason}")?;
+                    }
+                }
+                Ok(())
+            }
+            Self::WebSocketError(err) => write!(f, "WebSocket error: {err}"),
+            Self::StreamEnded => write!(f, "WebSocket stream ended unexpectedly"),
+            Self::ConnectionFailed(err) => write!(f, "Connection failed: {err}"),
+        }
+    }
+}
+
+/// Connection state of the TrackAudio client.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ConnectionState {
+    /// The client is attempting to connect to TrackAudio.
+    Connecting {
+        /// The connection attempt number (1-indexed).
+        attempt: usize,
+    },
+
+    /// The client has successfully connected to TrackAudio.
+    Connected,
+
+    /// The client has been disconnected from TrackAudio.
+    Disconnected {
+        /// The reason for the disconnection.
+        reason: DisconnectReason,
+    },
+
+    /// The client is attempting to reconnect to TrackAudio.
+    Reconnecting {
+        /// The reconnection attempt number (1-indexed).
+        attempt: usize,
+
+        /// The delay before the next reconnection attempt.
+        next_delay: Duration,
+    },
+
+    /// The client has exhausted all reconnection attempts.
+    ReconnectFailed {
+        /// The total number of reconnection attempts made.
+        attempts: usize,
+    },
+}
+
 /// Client-side event variants.
 ///
 /// These events are generated locally by the TrackAudio client and do not originate
 /// from the TrackAudio instance. They represent client-side state changes or errors.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ClientEvent {
-    /// The client has been disconnected from TrackAudio.
-    Disconnected {
-        /// The reason for the disconnection.
-        reason: String,
-    },
+    /// The connection state has changed.
+    ConnectionStateChanged(ConnectionState),
 
     /// A command failed to send to TrackAudio.
     CommandSendFailed {

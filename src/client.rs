@@ -1,5 +1,7 @@
 use crate::messages::{Command, Event, Request};
-use crate::{ClientEvent, Result, TrackAudioConfig, TrackAudioError};
+use crate::{
+    ClientEvent, ConnectionState, DisconnectReason, Result, TrackAudioConfig, TrackAudioError,
+};
 use futures_util::stream::{SplitSink, SplitStream};
 use futures_util::{SinkExt, StreamExt};
 use std::sync::Arc;
@@ -26,6 +28,7 @@ struct Inner {
     command_tx: mpsc::Sender<Command>,
     event_tx: broadcast::Sender<Event>,
     shutdown: CancellationToken,
+    reconnect_tx: mpsc::Sender<()>,
     task: JoinHandle<()>,
 }
 
@@ -41,30 +44,22 @@ impl TrackAudioClient {
     /// - `Err(TrackAudioError)`: Returns an error if the connection fails (e.g., network issues or invalid configuration).
     ///
     /// # Errors
-    /// - [`TrackAudioError::Websocket`](crate::TrackAudioError::WebSocket): If the WebSocket connection failed
+    /// - [`TrackAudioError::Websocket`](TrackAudioError::WebSocket): If the WebSocket connection failed
     #[cfg_attr(feature = "tracing", tracing::instrument(err))]
     pub async fn connect(config: TrackAudioConfig) -> Result<Self> {
-        #[cfg(feature = "tracing")]
-        tracing::info!("Connecting to TrackAudio");
-        let (ws_stream, _) = tokio_tungstenite::connect_async(config.url).await?;
-
-        #[cfg(feature = "tracing")]
-        tracing::debug!("Successfully connected to TrackAudio");
-        let (ws_tx, ws_rx) = ws_stream.split();
-
         let (command_tx, command_rx) = mpsc::channel::<Command>(config.command_channel_capacity);
         let (event_tx, _) = broadcast::channel::<Event>(config.event_channel_capacity);
+        let (reconnect_tx, reconnect_rx) = mpsc::channel::<()>(1);
         let shutdown = CancellationToken::new();
 
         #[cfg(feature = "tracing")]
         tracing::trace!("Spawning client task");
-        let task = tokio::runtime::Handle::current().spawn(Self::run_client(
-            ws_tx,
-            ws_rx,
+        let task = tokio::runtime::Handle::current().spawn(Self::run_client_with_reconnect(
             command_rx,
             event_tx.clone(),
+            reconnect_rx,
             shutdown.clone(),
-            config.ping_interval,
+            config,
         ));
 
         Ok(Self {
@@ -72,6 +67,7 @@ impl TrackAudioClient {
                 command_tx,
                 event_tx,
                 shutdown,
+                reconnect_tx,
                 task,
             }),
         })
@@ -201,7 +197,7 @@ impl TrackAudioClient {
                     }
                     Err(broadcast::error::RecvError::Lagged(skipped)) => {
                         #[cfg(feature = "tracing")]
-                        tracing::trace!(skipped = ?skipped, "Lagged while receiving events");
+                        tracing::trace!(?skipped, "Lagged while receiving events");
                         return Err(TrackAudioError::Receive(format!(
                             "lagged by {skipped} events"
                         )));
@@ -317,15 +313,204 @@ impl TrackAudioClient {
         self.inner.task.abort();
     }
 
+    /// Manually triggers a reconnection attempt.
+    ///
+    /// This method can be used to force a reconnection even if the client is currently connected.
+    /// It will gracefully close the existing connection and attempt to establish a new one.
+    ///
+    /// # Returns
+    /// - `Ok(())`: If the reconnection request was successfully queued
+    /// - `Err(TrackAudioError)`: If the reconnection request could not be sent
+    ///
+    /// # Errors
+    /// - [`TrackAudioError::Send`]: If the reconnection request could not be sent to the client task
+    pub async fn reconnect(&self) -> Result<()> {
+        #[cfg(feature = "tracing")]
+        tracing::debug!("Manual reconnection requested");
+        self.inner
+            .reconnect_tx
+            .send(())
+            .await
+            .map_err(|e| TrackAudioError::Send(e.to_string()))
+    }
+
+    fn calculate_backoff(attempt: usize, config: &TrackAudioConfig) -> Duration {
+        if attempt == 0 {
+            return config.initial_backoff;
+        }
+
+        let backoff_secs = config.initial_backoff.as_secs_f64()
+            * config.backoff_multiplier.powi((attempt - 1) as i32);
+        let backoff = Duration::from_secs_f64(backoff_secs.min(config.max_backoff.as_secs_f64()));
+
+        #[cfg(feature = "reconnect-jitter")]
+        {
+            let jitter = (rand::random::<f64>() * 0.2 - 0.1) * backoff.as_secs_f64();
+            Duration::from_secs_f64((backoff.as_secs_f64() + jitter).max(0.0))
+        }
+        #[cfg(not(feature = "reconnect-jitter"))]
+        backoff
+    }
+
+    async fn establish_connection(url: &str) -> Result<WebSocketStream<MaybeTlsStream<TcpStream>>> {
+        #[cfg(feature = "tracing")]
+        tracing::debug!("Attempting to establish WebSocket connection");
+
+        let (ws_stream, _) = tokio_tungstenite::connect_async(url).await?;
+
+        #[cfg(feature = "tracing")]
+        tracing::debug!("Successfully established WebSocket connection");
+
+        Ok(ws_stream)
+    }
+
+    fn should_attempt_reconnect(shutdown: &CancellationToken, config: &TrackAudioConfig) -> bool {
+        if shutdown.is_cancelled() {
+            #[cfg(feature = "tracing")]
+            tracing::debug!("Shutdown requested, not reconnecting");
+            return false;
+        }
+
+        if !config.enable_auto_reconnect {
+            #[cfg(feature = "tracing")]
+            tracing::debug!("Auto-reconnect disabled, not reconnecting");
+            return false;
+        }
+
+        true
+    }
+
+    #[cfg_attr(feature = "tracing", tracing::instrument(skip_all))]
+    async fn run_client_with_reconnect(
+        mut command_rx: mpsc::Receiver<Command>,
+        event_tx: broadcast::Sender<Event>,
+        mut reconnect_rx: mpsc::Receiver<()>,
+        shutdown: CancellationToken,
+        config: TrackAudioConfig,
+    ) {
+        #[cfg(feature = "tracing")]
+        tracing::debug!("Client task with reconnection started");
+
+        let mut attempt = 0;
+        let mut should_reconnect = true;
+
+        while should_reconnect {
+            attempt += 1;
+
+            Self::send_client_event(
+                &event_tx,
+                ClientEvent::ConnectionStateChanged(ConnectionState::Connecting { attempt }),
+            );
+
+            match Self::establish_connection(&config.url).await {
+                Ok(ws_stream) => {
+                    #[cfg(feature = "tracing")]
+                    tracing::info!(?attempt, "Connected to TrackAudio");
+                    attempt = 0;
+
+                    Self::send_client_event(
+                        &event_tx,
+                        ClientEvent::ConnectionStateChanged(ConnectionState::Connected),
+                    );
+
+                    let (ws_tx, ws_rx) = ws_stream.split();
+
+                    let disconnect_reason = Self::run_client(
+                        ws_tx,
+                        ws_rx,
+                        &mut command_rx,
+                        &event_tx,
+                        &mut reconnect_rx,
+                        &shutdown,
+                        config.ping_interval,
+                    )
+                    .await;
+
+                    #[cfg(feature = "tracing")]
+                    tracing::info!(?attempt, "Disconnected from TrackAudio");
+
+                    Self::send_client_event(
+                        &event_tx,
+                        ClientEvent::ConnectionStateChanged(ConnectionState::Disconnected {
+                            reason: disconnect_reason.clone(),
+                        }),
+                    );
+
+                    should_reconnect = Self::should_attempt_reconnect(&shutdown, &config);
+                }
+                Err(err) => {
+                    #[cfg(feature = "tracing")]
+                    tracing::warn!(?attempt, ?err, "Connection attempt failed");
+
+                    if let Some(max_attempts) = config.max_reconnect_attempts {
+                        if attempt >= max_attempts {
+                            #[cfg(feature = "tracing")]
+                            tracing::error!(
+                                ?attempt,
+                                ?max_attempts,
+                                "Max reconnection attempts reached"
+                            );
+                            Self::send_client_event(
+                                &event_tx,
+                                ClientEvent::ConnectionStateChanged(
+                                    ConnectionState::ReconnectFailed { attempts: attempt },
+                                ),
+                            );
+                            should_reconnect = false;
+                            continue;
+                        }
+                    }
+
+                    Self::send_client_event(
+                        &event_tx,
+                        ClientEvent::ConnectionStateChanged(ConnectionState::Disconnected {
+                            reason: DisconnectReason::ConnectionFailed(err.to_string()),
+                        }),
+                    );
+
+                    should_reconnect = Self::should_attempt_reconnect(&shutdown, &config);
+                }
+            }
+
+            if should_reconnect {
+                let backoff = Self::calculate_backoff(attempt, &config);
+
+                #[cfg(feature = "tracing")]
+                tracing::debug!(?attempt, ?backoff, "Waiting before attempting reconnect");
+
+                Self::send_client_event(
+                    &event_tx,
+                    ClientEvent::ConnectionStateChanged(ConnectionState::Reconnecting {
+                        attempt: attempt + 1,
+                        next_delay: backoff,
+                    }),
+                );
+
+                tokio::select! {
+                    _ = tokio::time::sleep(backoff) => {},
+                    _ = shutdown.cancelled() => {
+                        #[cfg(feature = "tracing")]
+                        tracing::debug!("Shutdown requested during backoff");
+                        should_reconnect = false;
+                    }
+                }
+            }
+        }
+
+        #[cfg(feature = "tracing")]
+        tracing::debug!("Client task with reconnection completed");
+    }
+
     #[cfg_attr(feature = "tracing", tracing::instrument(skip_all))]
     async fn run_client(
         mut ws_tx: SplitSink<WebSocketStream<MaybeTlsStream<TcpStream>>, Message>,
         mut ws_rx: SplitStream<WebSocketStream<MaybeTlsStream<TcpStream>>>,
-        mut command_rx: mpsc::Receiver<Command>,
-        event_tx: broadcast::Sender<Event>,
-        shutdown: CancellationToken,
+        command_rx: &mut mpsc::Receiver<Command>,
+        event_tx: &broadcast::Sender<Event>,
+        reconnect_rx: &mut mpsc::Receiver<()>,
+        shutdown: &CancellationToken,
         ping_interval: Duration,
-    ) {
+    ) -> DisconnectReason {
         #[cfg(feature = "tracing")]
         tracing::debug!("Client task started");
         let mut ping_interval = tokio::time::interval(ping_interval);
@@ -341,20 +526,24 @@ impl TrackAudioClient {
                         #[cfg(feature = "tracing")]
                         tracing::debug!(?err, "Failed to send Close message");
                     }
-                    break;
+                    return DisconnectReason::Shutdown;
+                }
+
+                Some(_) = reconnect_rx.recv() => {
+                    #[cfg(feature = "tracing")]
+                    tracing::debug!("Manual reconnection requested, closing connection");
+                    if let Err(err) = ws_tx.send(Message::Close(None)).await {
+                        #[cfg(feature = "tracing")]
+                        tracing::debug!(?err, "Failed to send Close message");
+                    }
+                    return DisconnectReason::ManualReconnect;
                 }
 
                 _ = ping_interval.tick() => {
                     if let Err(err) = ws_tx.send(Message::Ping(Bytes::new())).await {
                         #[cfg(feature = "tracing")]
                         tracing::error!(?err, "Failed to send ping");
-                        Self::send_client_event(
-                            &event_tx,
-                            ClientEvent::Disconnected {
-                                reason: format!("Failed to send ping: {err}"),
-                            }
-                        );
-                        break;
+                        return DisconnectReason::PingFailed(err.to_string());
                     }
                 }
 
@@ -365,20 +554,20 @@ impl TrackAudioClient {
                                 #[cfg(feature = "tracing")]
                                 tracing::error!(?err, "Failed to send WebSocket message");
                                 Self::send_client_event(
-                                    &event_tx,
+                                    event_tx,
                                     ClientEvent::CommandSendFailed {
                                         command: cmd,
                                         error: err.to_string(),
                                     }
                                 );
-                                break;
+                                return DisconnectReason::CommandSendFailed(err.to_string());
                             }
                         }
                         Err(err) => {
                             #[cfg(feature = "tracing")]
                             tracing::error!(?err, "Failed to serialize command");
                             Self::send_client_event(
-                                &event_tx,
+                                event_tx,
                                 ClientEvent::CommandSendFailed {
                                     command: cmd,
                                     error: format!("Failed to serialize command: {err}"),
@@ -402,7 +591,7 @@ impl TrackAudioClient {
                                     #[cfg(feature = "tracing")]
                                     tracing::warn!(?err, ?json, "Failed to deserialize event");
                                     Self::send_client_event(
-                                        &event_tx,
+                                        event_tx,
                                         ClientEvent::EventDeserializationFailed {
                                             raw: json.to_string(),
                                             error: err.to_string(),
@@ -417,25 +606,25 @@ impl TrackAudioClient {
                             if let Err(err) = ws_tx.send(Message::Pong(payload)).await {
                                 #[cfg(feature = "tracing")]
                                 tracing::warn!(?err, "Failed to send pong");
-                                Self::send_client_event(
-                                    &event_tx,
-                                    ClientEvent::Disconnected {
-                                        reason: format!("Failed to send pong: {err}"),
-                                    }
-                                );
-                                break;
+                                return DisconnectReason::PongFailed(err.to_string());
                             }
                         }
+                        Some(Ok(Message::Pong(_))) => continue,
                         Some(Ok(Message::Close(frame))) => {
                             #[cfg(feature = "tracing")]
                             tracing::info!(?frame, "WebSocket connection closed");
-                            Self::send_client_event(
-                                &event_tx,
-                                ClientEvent::Disconnected {
-                                    reason: format!("WebSocket closed by peer: {frame:?}"),
+                            let (code, reason) = match frame.as_ref() {
+                                Some(f) => {
+                                    let reason = if f.reason.is_empty() {
+                                        None
+                                    } else {
+                                        Some(f.reason.to_string())
+                                    };
+                                    (Some(f.code.into()), reason)
                                 }
-                            );
-                            break;
+                                None => (None, None)
+                            };
+                            return DisconnectReason::ClosedByPeer {code, reason};
                         },
                         Some(Ok(other)) => {
                             #[cfg(feature = "tracing")]
@@ -445,32 +634,17 @@ impl TrackAudioClient {
                         Some(Err(err)) => {
                             #[cfg(feature = "tracing")]
                             tracing::error!(?err, "Failed to receive WebSocket message");
-                            Self::send_client_event(
-                                &event_tx,
-                                ClientEvent::Disconnected {
-                                    reason: format!("WebSocket error: {err}"),
-                                }
-                            );
-                            break;
+                            return DisconnectReason::WebSocketError(err.to_string());
                         }
                         None => {
                             #[cfg(feature = "tracing")]
                             tracing::error!("WebSocket stream ended unexpectedly");
-                            Self::send_client_event(
-                                &event_tx,
-                                ClientEvent::Disconnected {
-                                    reason: "WebSocket stream ended unexpectedly".to_string(),
-                                }
-                            );
-                            break;
+                            return DisconnectReason::StreamEnded;
                         },
                     }
                 }
             }
         }
-
-        #[cfg(feature = "tracing")]
-        tracing::debug!("Client task completed");
     }
 
     fn send_client_event(event_tx: &broadcast::Sender<Event>, client_event: ClientEvent) {

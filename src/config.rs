@@ -16,6 +16,16 @@ pub struct TrackAudioConfig {
     pub event_channel_capacity: usize,
     /// The interval the client sends ping packages to TrackAudio to verify the connection is still healthy. Default: 15 seconds
     pub ping_interval: Duration,
+    /// Whether to automatically reconnect when the connection is lost. Default: `true`
+    pub enable_auto_reconnect: bool,
+    /// Maximum number of reconnection attempts before giving up. `None` means infinite retries. Default: `None`
+    pub max_reconnect_attempts: Option<usize>,
+    /// Initial backoff duration for reconnection attempts. Default: 1 second
+    pub initial_backoff: Duration,
+    /// Maximum backoff duration for reconnection attempts. Default: 60 seconds
+    pub max_backoff: Duration,
+    /// Backoff multiplier for exponential backoff. Default: 2.0
+    pub backoff_multiplier: f64,
 }
 
 impl TrackAudioConfig {
@@ -43,6 +53,11 @@ impl TrackAudioConfig {
             command_channel_capacity: 256,
             event_channel_capacity: 256,
             ping_interval: Duration::from_secs(15),
+            enable_auto_reconnect: true,
+            max_reconnect_attempts: None,
+            initial_backoff: Duration::from_secs(1),
+            max_backoff: Duration::from_secs(60),
+            backoff_multiplier: 2.0,
         })
     }
 
@@ -88,6 +103,81 @@ impl TrackAudioConfig {
     /// ```
     pub fn with_ping_interval(mut self, ping_interval: Duration) -> Self {
         self.ping_interval = ping_interval;
+        self
+    }
+
+    /// Enables or disables automatic reconnection when the connection is lost.
+    ///
+    /// # Defaults
+    /// - Auto reconnect: enabled
+    ///
+    /// # Example
+    /// ```rust
+    /// use trackaudio::TrackAudioConfig;
+    /// let config = TrackAudioConfig::default()
+    ///     .with_auto_reconnect(false);
+    /// assert_eq!(config.enable_auto_reconnect, false);
+    /// ```
+    pub fn with_auto_reconnect(mut self, enable: bool) -> Self {
+        self.enable_auto_reconnect = enable;
+        self
+    }
+
+    /// Sets the maximum number of reconnection attempts before giving up.
+    ///
+    /// # Parameters
+    /// - `max_attempts`: Maximum number of reconnection attempts. Use `None` for infinite retries.
+    ///
+    /// # Defaults
+    /// - Max reconnect attempts: `None` (infinite)
+    ///
+    /// # Example
+    /// ```rust
+    /// use trackaudio::TrackAudioConfig;
+    /// let config = TrackAudioConfig::default()
+    ///     .with_max_reconnect_attempts(Some(5));
+    /// assert_eq!(config.max_reconnect_attempts, Some(5));
+    /// ```
+    pub fn with_max_reconnect_attempts(mut self, max_attempts: Option<usize>) -> Self {
+        self.max_reconnect_attempts = max_attempts;
+        self
+    }
+
+    /// Configures the exponential backoff parameters for reconnection attempts.
+    ///
+    /// # Parameters
+    /// - `initial_backoff`: Initial delay before the first reconnection attempt
+    /// - `max_backoff`: Maximum delay between reconnection attempts
+    /// - `multiplier`: Factor by which the backoff increases after each failed attempt
+    ///
+    /// # Defaults
+    /// - Initial backoff: 1 second
+    /// - Max backoff: 60 seconds
+    /// - Multiplier: 2.0
+    ///
+    /// # Example
+    /// ```rust
+    /// use std::time::Duration;
+    /// use trackaudio::TrackAudioConfig;
+    /// let config = TrackAudioConfig::default()
+    ///     .with_backoff_config(
+    ///         Duration::from_millis(500),
+    ///         Duration::from_secs(30),
+    ///         1.5
+    ///     );
+    /// assert_eq!(config.initial_backoff, Duration::from_millis(500));
+    /// assert_eq!(config.max_backoff, Duration::from_secs(30));
+    /// assert_eq!(config.backoff_multiplier, 1.5);
+    /// ```
+    pub fn with_backoff_config(
+        mut self,
+        initial_backoff: Duration,
+        max_backoff: Duration,
+        multiplier: f64,
+    ) -> Self {
+        self.initial_backoff = initial_backoff;
+        self.max_backoff = max_backoff;
+        self.backoff_multiplier = multiplier;
         self
     }
 
