@@ -47,6 +47,9 @@ impl TrackAudioConfig {
     /// assert!(config.is_ok());
     /// assert_eq!(config.unwrap().url, "ws://192.168.1.69:49080/ws");
     /// ```
+    ///
+    /// # Errors
+    /// - [`TrackAudioError::InvalidUrl`](TrackAudioError::InvalidUrl): If the provided URL is invalid.
     pub fn new(url: impl AsRef<str>) -> crate::Result<Self> {
         Ok(Self {
             url: Self::normalize_url(url.as_ref())?,
@@ -76,6 +79,7 @@ impl TrackAudioConfig {
     /// assert_eq!(config.command_channel_capacity, 100);
     /// assert_eq!(config.event_channel_capacity, 50);
     /// ```
+    #[must_use]
     pub fn with_capacity(
         mut self,
         command_channel_capacity: usize,
@@ -101,6 +105,7 @@ impl TrackAudioConfig {
     ///     .with_ping_interval(Duration::from_secs(10));
     /// assert_eq!(config.ping_interval, Duration::from_secs(10));
     /// ```
+    #[must_use]
     pub fn with_ping_interval(mut self, ping_interval: Duration) -> Self {
         self.ping_interval = ping_interval;
         self
@@ -118,6 +123,7 @@ impl TrackAudioConfig {
     ///     .with_auto_reconnect(false);
     /// assert_eq!(config.enable_auto_reconnect, false);
     /// ```
+    #[must_use]
     pub fn with_auto_reconnect(mut self, enable: bool) -> Self {
         self.enable_auto_reconnect = enable;
         self
@@ -138,6 +144,7 @@ impl TrackAudioConfig {
     ///     .with_max_reconnect_attempts(Some(5));
     /// assert_eq!(config.max_reconnect_attempts, Some(5));
     /// ```
+    #[must_use]
     pub fn with_max_reconnect_attempts(mut self, max_attempts: Option<usize>) -> Self {
         self.max_reconnect_attempts = max_attempts;
         self
@@ -169,6 +176,7 @@ impl TrackAudioConfig {
     /// assert_eq!(config.max_backoff, Duration::from_secs(30));
     /// assert_eq!(config.backoff_multiplier, 1.5);
     /// ```
+    #[must_use]
     pub fn with_backoff_config(
         mut self,
         initial_backoff: Duration,

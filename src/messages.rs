@@ -142,6 +142,7 @@ impl Frequency {
     /// assert_eq!(freq.as_khz(), 132_600);
     /// assert_eq!(freq.as_mhz(), 132.600);
     /// ```
+    #[must_use]
     pub const fn from_hz(hz: u64) -> Self {
         Self(hz)
     }
@@ -158,6 +159,7 @@ impl Frequency {
     /// assert_eq!(freq.as_khz(), 132_600);
     /// assert_eq!(freq.as_mhz(), 132.600);
     /// ```
+    #[must_use]
     pub const fn from_khz(khz: u64) -> Self {
         Self(khz * 1_000)
     }
@@ -174,6 +176,12 @@ impl Frequency {
     /// assert_eq!(freq.as_khz(), 132_600);
     /// assert_eq!(freq.as_mhz(), 132.600);
     /// ```
+    #[allow(
+        clippy::cast_precision_loss,
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss
+    )]
+    #[must_use]
     pub fn from_mhz(mhz: f64) -> Self {
         Self((mhz * 1_000_000.0f64).round() as u64)
     }
@@ -181,16 +189,20 @@ impl Frequency {
     /// Returns the frequency in Hertz (Hz).
     ///
     /// This is the same as accessing the underlying type, as the frequency is stored in Hertz internally.
+    #[must_use]
     pub const fn as_hz(&self) -> u64 {
         self.0
     }
 
     /// Returns the frequency in Kilohertz (kHz).
+    #[must_use]
     pub const fn as_khz(&self) -> u64 {
         self.0 / 1_000
     }
 
     /// Returns the frequency in Megahertz (MHz).
+    #[allow(clippy::cast_precision_loss)]
+    #[must_use]
     pub fn as_mhz(&self) -> f64 {
         self.0 as f64 / 1_000_000.0f64
     }

@@ -21,6 +21,7 @@ impl TrackAudioClient {
     ///
     /// # Returns
     /// - `TrackAudioApi`: API instance tied to the lifetime of `self`.
+    #[must_use]
     pub fn api(&self) -> TrackAudioApi<'_> {
         TrackAudioApi::new(self)
     }
@@ -29,6 +30,7 @@ impl TrackAudioClient {
 impl<'a> TrackAudioApi<'a> {
     /// Creates a higher-level [`TrackAudioApi`] from the given [`TrackAudioClient`] instance.
     /// - `TrackAudioApi`: API instance tied to the lifetime of `client`.
+    #[must_use]
     pub fn new(client: &'a TrackAudioClient) -> Self {
         Self { client }
     }

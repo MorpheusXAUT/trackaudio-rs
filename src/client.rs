@@ -187,7 +187,7 @@ impl TrackAudioClient {
                             if command == &cmd {
                                 #[cfg(feature = "tracing")]
                                 tracing::trace!(?cmd, ?event, "Command send failed");
-                                return Err(TrackAudioError::Send(error.to_string()));
+                                return Err(TrackAudioError::Send(error.clone()));
                             }
                         }
 
@@ -294,6 +294,7 @@ impl TrackAudioClient {
     /// A [`broadcast::Receiver`] of type [`Event`] that can be used to receive events from the
     /// TrackAudio instance. This channel will also receive any errors emitted during command
     /// transmission or processing.
+    #[must_use]
     pub fn subscribe(&self) -> broadcast::Receiver<Event> {
         self.inner.event_tx.subscribe()
     }
@@ -339,6 +340,7 @@ impl TrackAudioClient {
             return config.initial_backoff;
         }
 
+        #[allow(clippy::cast_possible_wrap, clippy::cast_possible_truncation)]
         let backoff_secs = config.initial_backoff.as_secs_f64()
             * config.backoff_multiplier.powi((attempt - 1) as i32);
         let backoff = Duration::from_secs_f64(backoff_secs.min(config.max_backoff.as_secs_f64()));
@@ -487,8 +489,8 @@ impl TrackAudioClient {
                 );
 
                 tokio::select! {
-                    _ = tokio::time::sleep(backoff) => {},
-                    _ = shutdown.cancelled() => {
+                    () = tokio::time::sleep(backoff) => {},
+                    () = shutdown.cancelled() => {
                         #[cfg(feature = "tracing")]
                         tracing::debug!("Shutdown requested during backoff");
                         should_reconnect = false;
@@ -501,6 +503,7 @@ impl TrackAudioClient {
         tracing::debug!("Client task with reconnection completed");
     }
 
+    #[allow(clippy::too_many_lines)]
     #[cfg_attr(feature = "tracing", tracing::instrument(skip_all))]
     async fn run_client(
         mut ws_tx: SplitSink<WebSocketStream<MaybeTlsStream<TcpStream>>, Message>,
@@ -519,7 +522,7 @@ impl TrackAudioClient {
             tokio::select! {
                 biased;
 
-                _ = shutdown.cancelled() => {
+                () = shutdown.cancelled() => {
                     #[cfg(feature = "tracing")]
                     tracing::debug!("Shutdown requested, sending Close message");
                     if let Err(err) = ws_tx.send(Message::Close(None)).await {
@@ -529,7 +532,7 @@ impl TrackAudioClient {
                     return DisconnectReason::Shutdown;
                 }
 
-                Some(_) = reconnect_rx.recv() => {
+                Some(()) = reconnect_rx.recv() => {
                     #[cfg(feature = "tracing")]
                     tracing::debug!("Manual reconnection requested, closing connection");
                     if let Err(err) = ws_tx.send(Message::Close(None)).await {
@@ -609,7 +612,7 @@ impl TrackAudioClient {
                                 return DisconnectReason::PongFailed(err.to_string());
                             }
                         }
-                        Some(Ok(Message::Pong(_))) => continue,
+                        Some(Ok(Message::Pong(_))) => {},
                         Some(Ok(Message::Close(frame))) => {
                             #[cfg(feature = "tracing")]
                             tracing::info!(?frame, "WebSocket connection closed");
@@ -629,7 +632,6 @@ impl TrackAudioClient {
                         Some(Ok(other)) => {
                             #[cfg(feature = "tracing")]
                             tracing::trace!(?other, "Received unexpected WebSocket message");
-                            continue;
                         },
                         Some(Err(err)) => {
                             #[cfg(feature = "tracing")]
