@@ -1,4 +1,4 @@
-use trackaudio::{ClientEvent, Event, TrackAudioClient};
+use trackaudio::{ClientEvent, ConnectionState, Event, TrackAudioClient};
 
 #[tokio::main]
 async fn main() -> trackaudio::Result<()> {
@@ -10,7 +10,9 @@ async fn main() -> trackaudio::Result<()> {
     println!("Listening for events...");
     loop {
         match events.recv().await {
-            Ok(Event::Client(ClientEvent::Disconnected { reason })) => {
+            Ok(Event::Client(ClientEvent::ConnectionStateChanged(
+                ConnectionState::Disconnected { reason },
+            ))) => {
                 println!("Disconnected from TrackAudio: {reason}");
                 break;
             }

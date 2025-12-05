@@ -13,6 +13,7 @@
 //! - **Type-safe commands and events**: Strongly-typed message protocol
 //! - **Request-response pattern**: High-level API for commands that expect responses
 //! - **Event streaming**: Subscribe to real-time events from TrackAudio
+//! - **Automatic reconnection**: Resilient WebSocket connections with exponential backoff
 //! - **Thread-safe**: Client can be safely shared across threads
 //!
 //! ## Quick start
@@ -131,15 +132,73 @@
 //! performed via [`TrackAudioClient::connect_url`]:
 //!
 //! ```rust,no_run
-//! use trackaudio::TrackAudioClient;
+//! use trackaudio::{TrackAudioClient, TrackAudioConfig};
+//! use std::time::Duration;
 //!
 //! #[tokio::main]
 //! async fn main() -> trackaudio::Result<()> {
-//!     // See [`TrackAudioConfig`] for supported URL variants.
-//!     let client = TrackAudioClient::connect_url("192.168.1.69").await?;
+//!     let config = TrackAudioConfig::new("192.168.1.69:49080")?
+//!         .with_capacity(512, 512)
+//!         .with_ping_interval(Duration::from_secs(10));
+//!
+//!     let client = TrackAudioClient::connect(config).await?;
+//!     Ok(())
+//! }
+//! ```
+//!
+//! ## Reconnection
+//!
+//! The client automatically reconnects on connection loss with exponential backoff.
+//! This is enabled by default and can be configured:
+//!
+//! ```rust,no_run
+//! use trackaudio::{TrackAudioClient, TrackAudioConfig, ConnectionState, ClientEvent, Event};
+//! use std::time::Duration;
+//!
+//! #[tokio::main]
+//! async fn main() -> trackaudio::Result<()> {
+//!     let config = TrackAudioConfig::default()
+//!         .with_auto_reconnect(true)             // Enabled by default
+//!         .with_max_reconnect_attempts(Some(10)) // None = infinite retries
+//!         .with_backoff_config(
+//!             Duration::from_secs(1),            // Initial backoff
+//!             Duration::from_secs(60),           // Max backoff
+//!             2.0,                               // Multiplier
+//!         );
+//!
+//!     let client = TrackAudioClient::connect(config).await?;
+//!
+//!     // Monitor connection state changes
+//!     let mut events = client.subscribe();
+//!     while let Ok(event) = events.recv().await {
+//!         if let Event::Client(ClientEvent::ConnectionStateChanged(state)) = event {
+//!             match state {
+//!                 ConnectionState::Disconnected { reason } => {
+//!                     println!("Disconnected: {reason}");
+//!                 }
+//!                 ConnectionState::Reconnecting { attempt, next_delay } => {
+//!                     println!("Reconnecting (attempt {attempt}) in {next_delay:?}...");
+//!                 }
+//!                 ConnectionState::Connected => {
+//!                     println!("Connected!");
+//!                 }
+//!                 _ => {}
+//!             }
+//!         }
+//!     }
 //!
 //!     Ok(())
 //! }
+//! ```
+//!
+//! You can also manually trigger reconnection:
+//!
+//! ```rust,no_run
+//! # use trackaudio::TrackAudioClient;
+//! # async fn example(client: TrackAudioClient) -> trackaudio::Result<()> {
+//! client.reconnect().await?;
+//! # Ok(())
+//! # }
 //! ```
 //!
 //! ## Request/response pattern
@@ -244,6 +303,9 @@
 //! - [TrackAudio SDK Documentation](https://github.com/pierr3/TrackAudio/wiki/SDK-documentation)
 //! - [VATSIM](https://vatsim.net/)
 
+#![warn(clippy::pedantic)]
+#![allow(clippy::doc_markdown)]
+
 mod api;
 mod client;
 mod config;
@@ -252,7 +314,7 @@ pub mod messages;
 pub use api::TrackAudioApi;
 pub use client::TrackAudioClient;
 pub use config::TrackAudioConfig;
-pub use messages::{ClientEvent, Command, Event, Frequency};
+pub use messages::{ClientEvent, Command, ConnectionState, DisconnectReason, Event, Frequency};
 
 /// The crate's `Result` type, used throughout the library to indicate success or failure.
 ///

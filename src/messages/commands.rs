@@ -164,9 +164,8 @@ impl Request for AddStation {
     }
 
     fn extract(event: &Event, cmd: &Command) -> Option<Self::Response> {
-        let callsign = match cmd {
-            Command::AddStation(AddStation { callsign }) => callsign,
-            _ => return None,
+        let Command::AddStation(AddStation { callsign }) = cmd else {
+            return None;
         };
         match event {
             Event::StationStateUpdate(state)
@@ -238,9 +237,8 @@ impl Request for SetStationState {
     }
 
     fn extract(event: &Event, cmd: &Command) -> Option<Self::Response> {
-        let frequency = match cmd {
-            Command::SetStationState(SetStationState { frequency, .. }) => frequency,
-            _ => return None,
+        let Command::SetStationState(SetStationState { frequency, .. }) = cmd else {
+            return None;
         };
         match event {
             Event::StationStateUpdate(state)
@@ -313,9 +311,8 @@ impl Request for ChangeStationVolume {
     }
 
     fn extract(event: &Event, cmd: &Command) -> Option<Self::Response> {
-        let frequency = match cmd {
-            Command::ChangeStationVolume(ChangeStationVolume { frequency, .. }) => frequency,
-            _ => return None,
+        let Command::ChangeStationVolume(ChangeStationVolume { frequency, .. }) = cmd else {
+            return None;
         };
         match event {
             Event::StationStateUpdate(state)
@@ -366,6 +363,7 @@ pub struct ChangeMainVolume {
 }
 
 impl ChangeMainVolume {
+    #[must_use]
     pub fn new(amount: i8) -> Self {
         Self {
             amount: amount.clamp(-100, 100),
@@ -419,9 +417,8 @@ impl Request for GetStationState {
     }
 
     fn extract(event: &Event, cmd: &Command) -> Option<Self::Response> {
-        let callsign = match cmd {
-            Command::GetStationState(GetStationState { callsign }) => callsign,
-            _ => return None,
+        let Command::GetStationState(GetStationState { callsign }) = cmd else {
+            return None;
         };
         match event {
             Event::StationStateUpdate(state)
@@ -576,18 +573,22 @@ impl TryFrom<BoolOrToggle> for bool {
 }
 
 impl BoolOrToggle {
+    #[must_use]
     pub fn is_toggle(&self) -> bool {
         matches!(self, BoolOrToggle::Toggle)
     }
 
+    #[must_use]
     pub fn is_true(&self) -> bool {
         matches!(self, BoolOrToggle::Bool(true))
     }
 
+    #[must_use]
     pub fn is_false(&self) -> bool {
         matches!(self, BoolOrToggle::Bool(false))
     }
 
+    #[must_use]
     pub fn as_bool(&self) -> Option<bool> {
         match self {
             BoolOrToggle::Bool(b) => Some(*b),
@@ -595,6 +596,7 @@ impl BoolOrToggle {
         }
     }
 
+    #[must_use]
     pub fn unwrap_or(&self, default: bool) -> bool {
         self.as_bool().unwrap_or(default)
     }
