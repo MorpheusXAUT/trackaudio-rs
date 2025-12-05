@@ -393,7 +393,7 @@ If you encounter a bug or have a feature request, please [open an issue](https:/
 4. Update documentation for API changes
 5. Submit your PR with a clear description of the changes
 
-Note that this project uses [Conventional Commits](https://www.conventionalcommits.org) in combination with [release-please](https://github.com/googleapis/release-please) for automatic [semantic versioning](https://semver.org/) and release automation.  
+Note that this project uses [Conventional Commits](https://www.conventionalcommits.org) in combination with [release-plz](https://release-plz.dev/) for automatic [semantic versioning](https://semver.org/) and release automation.  
 Please ensure your commits follow this format when submitting a PR.
 
 For significant changes, please open an issue first to discuss your proposal.
