@@ -522,7 +522,7 @@ impl Request for GetVoiceConnectedState {
 /// let enabled = BoolOrToggle::Bool(false);
 /// assert_eq!(enabled, BoolOrToggle::Bool(false));
 ///
-/// // Toggle the current value
+/// // Toggle the current state
 /// let toggle = BoolOrToggle::Toggle;
 /// assert_eq!(toggle, BoolOrToggle::Toggle);
 ///
@@ -537,14 +537,61 @@ impl Request for GetVoiceConnectedState {
 /// let from_opt_none: BoolOrToggle = None.into();
 /// assert_eq!(from_opt_none, BoolOrToggle::Toggle);
 /// ```
-#[derive(Debug, Clone, PartialEq, Serialize)]
-#[serde(untagged)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum BoolOrToggle {
     /// A specific boolean value.
     Bool(bool),
     /// Toggle the current state. Serializable as `"toggle"`.
-    #[serde(rename = "toggle")]
     Toggle,
+}
+
+impl serde::Serialize for BoolOrToggle {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        match self {
+            BoolOrToggle::Bool(b) => serializer.serialize_bool(*b),
+            BoolOrToggle::Toggle => serializer.serialize_str("toggle"),
+        }
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for BoolOrToggle {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        struct BoolOrToggleVisitor;
+
+        impl serde::de::Visitor<'_> for BoolOrToggleVisitor {
+            type Value = BoolOrToggle;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+                formatter.write_str("a boolean or \"toggle\"")
+            }
+
+            fn visit_bool<E>(self, value: bool) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(BoolOrToggle::Bool(value))
+            }
+
+            fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                if value == "toggle" {
+                    Ok(BoolOrToggle::Toggle)
+                } else {
+                    Err(E::custom(format!("expected \"toggle\", got {value}")))
+                }
+            }
+        }
+
+        deserializer.deserialize_any(BoolOrToggleVisitor)
+    }
 }
 
 impl From<bool> for BoolOrToggle {
