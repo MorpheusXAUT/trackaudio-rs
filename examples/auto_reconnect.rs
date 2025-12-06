@@ -54,7 +54,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tokio::time::sleep(Duration::from_secs(5)).await;
 
     println!("Triggering manual reconnection...");
-    client.reconnect().await?;
+    client.reconnect()?;
 
     event_task.await?;
 
