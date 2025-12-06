@@ -522,7 +522,7 @@ impl Request for GetVoiceConnectedState {
 /// let enabled = BoolOrToggle::Bool(false);
 /// assert_eq!(enabled, BoolOrToggle::Bool(false));
 ///
-/// // Toggle the current value
+/// // Toggle the current state
 /// let toggle = BoolOrToggle::Toggle;
 /// assert_eq!(toggle, BoolOrToggle::Toggle);
 ///
@@ -537,14 +537,61 @@ impl Request for GetVoiceConnectedState {
 /// let from_opt_none: BoolOrToggle = None.into();
 /// assert_eq!(from_opt_none, BoolOrToggle::Toggle);
 /// ```
-#[derive(Debug, Clone, PartialEq, Serialize)]
-#[serde(untagged)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum BoolOrToggle {
     /// A specific boolean value.
     Bool(bool),
     /// Toggle the current state. Serializable as `"toggle"`.
-    #[serde(rename = "toggle")]
     Toggle,
+}
+
+impl serde::Serialize for BoolOrToggle {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        match self {
+            BoolOrToggle::Bool(b) => serializer.serialize_bool(*b),
+            BoolOrToggle::Toggle => serializer.serialize_str("toggle"),
+        }
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for BoolOrToggle {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        struct BoolOrToggleVisitor;
+
+        impl serde::de::Visitor<'_> for BoolOrToggleVisitor {
+            type Value = BoolOrToggle;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+                formatter.write_str("a boolean or \"toggle\"")
+            }
+
+            fn visit_bool<E>(self, value: bool) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(BoolOrToggle::Bool(value))
+            }
+
+            fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                if value == "toggle" {
+                    Ok(BoolOrToggle::Toggle)
+                } else {
+                    Err(E::custom(format!("expected \"toggle\", got {value}")))
+                }
+            }
+        }
+
+        deserializer.deserialize_any(BoolOrToggleVisitor)
+    }
 }
 
 impl From<bool> for BoolOrToggle {
@@ -599,5 +646,127 @@ impl BoolOrToggle {
     #[must_use]
     pub fn unwrap_or(&self, default: bool) -> bool {
         self.as_bool().unwrap_or(default)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    mod bool_or_toggle {
+        use super::BoolOrToggle;
+        use serde_json;
+
+        #[test]
+        fn from_bool() {
+            let b = BoolOrToggle::from(true);
+            assert_eq!(b, BoolOrToggle::Bool(true));
+        }
+
+        #[test]
+        fn from_option_bool() {
+            let b = BoolOrToggle::from(Some(true));
+            assert_eq!(b, BoolOrToggle::Bool(true));
+        }
+
+        #[test]
+        fn from_option_none() {
+            let b = BoolOrToggle::from(None);
+            assert_eq!(b, BoolOrToggle::Toggle);
+        }
+
+        #[test]
+        fn bool_try_from() {
+            let b = BoolOrToggle::Bool(true);
+            assert_eq!(bool::try_from(b), Ok(true));
+        }
+
+        #[test]
+        fn toggle_try_from() {
+            let b = BoolOrToggle::Toggle;
+            assert_eq!(bool::try_from(b), Err(()));
+        }
+
+        #[test]
+        fn is_toggle() {
+            let b = BoolOrToggle::Toggle;
+            assert!(b.is_toggle());
+        }
+
+        #[test]
+        fn is_true() {
+            let b = BoolOrToggle::Bool(true);
+            assert!(b.is_true());
+        }
+
+        #[test]
+        fn is_false() {
+            let b = BoolOrToggle::Bool(false);
+            assert!(b.is_false());
+        }
+
+        #[test]
+        fn bool_as_bool() {
+            let b = BoolOrToggle::Bool(true);
+            assert_eq!(b.as_bool(), Some(true));
+        }
+
+        #[test]
+        fn toggle_as_bool() {
+            let b = BoolOrToggle::Toggle;
+            assert_eq!(b.as_bool(), None);
+        }
+
+        #[test]
+        fn bool_unwrap_or() {
+            let b = BoolOrToggle::Bool(true);
+            assert!(b.unwrap_or(false));
+        }
+
+        #[test]
+        fn toggle_unwrap_or() {
+            let b = BoolOrToggle::Toggle;
+            assert!(!b.unwrap_or(false));
+        }
+
+        #[test]
+        fn serialize_bool() {
+            assert_eq!(
+                serde_json::to_string(&BoolOrToggle::Bool(true)).unwrap(),
+                "true"
+            );
+            assert_eq!(
+                serde_json::to_string(&BoolOrToggle::Bool(false)).unwrap(),
+                "false"
+            );
+        }
+
+        #[test]
+        fn serialize_toggle() {
+            assert_eq!(
+                serde_json::to_string(&BoolOrToggle::Toggle).unwrap(),
+                "\"toggle\""
+            );
+        }
+
+        #[test]
+        fn deserialize_bool() {
+            assert_eq!(
+                serde_json::from_str::<BoolOrToggle>("true").unwrap(),
+                BoolOrToggle::Bool(true)
+            );
+            assert_eq!(
+                serde_json::from_str::<BoolOrToggle>("false").unwrap(),
+                BoolOrToggle::Bool(false)
+            );
+        }
+
+        #[test]
+        fn deserialize_toggle() {
+            assert_eq!(
+                serde_json::from_str::<BoolOrToggle>("\"toggle\"").unwrap(),
+                BoolOrToggle::Toggle
+            );
+        }
     }
 }

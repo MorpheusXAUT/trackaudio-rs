@@ -324,15 +324,25 @@ impl TrackAudioClient {
     /// - `Err(TrackAudioError)`: If the reconnection request could not be sent
     ///
     /// # Errors
-    /// - [`TrackAudioError::Send`]: If the reconnection request could not be sent to the client task
-    pub async fn reconnect(&self) -> Result<()> {
+    /// - [`TrackAudioError::ClientTaskTerminated`]: If the client task has been terminated
+    ///
+    /// # Notes
+    /// - If a reconnection request is already pending, this method will return `Ok(())` immediately,
+    ///   effectively deduplicating the request.
+    pub fn reconnect(&self) -> Result<()> {
         #[cfg(feature = "tracing")]
         tracing::debug!("Manual reconnection requested");
-        self.inner
-            .reconnect_tx
-            .send(())
-            .await
-            .map_err(|e| TrackAudioError::Send(e.to_string()))
+        match self.inner.reconnect_tx.try_send(()) {
+            Ok(()) => Ok(()),
+            Err(mpsc::error::TrySendError::Full(())) => {
+                #[cfg(feature = "tracing")]
+                tracing::debug!("Reconnection already pending");
+                Ok(())
+            }
+            Err(mpsc::error::TrySendError::Closed(())) => {
+                Err(TrackAudioError::ClientTaskTerminated)
+            }
+        }
     }
 
     fn calculate_backoff(attempt: usize, config: &TrackAudioConfig) -> Duration {
@@ -490,6 +500,11 @@ impl TrackAudioClient {
 
                 tokio::select! {
                     () = tokio::time::sleep(backoff) => {},
+                    Some(()) = reconnect_rx.recv() => {
+                        #[cfg(feature = "tracing")]
+                        tracing::debug!("Manual reconnection requested during backoff");
+                        attempt = 0;
+                    }
                     () = shutdown.cancelled() => {
                         #[cfg(feature = "tracing")]
                         tracing::debug!("Shutdown requested during backoff");

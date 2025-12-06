@@ -194,11 +194,11 @@
 //! You can also manually trigger reconnection:
 //!
 //! ```rust,no_run
-//! # use trackaudio::TrackAudioClient;
-//! # async fn example(client: TrackAudioClient) -> trackaudio::Result<()> {
-//! client.reconnect().await?;
-//! # Ok(())
-//! # }
+//! use trackaudio::TrackAudioClient;
+//! async fn example(client: TrackAudioClient) -> trackaudio::Result<()> {
+//!     client.reconnect()?;
+//!     Ok(())
+//! }
 //! ```
 //!
 //! ## Request/response pattern
