@@ -246,3 +246,89 @@ impl From<Frequency> for f64 {
         freq.as_mhz()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    mod frequency {
+        use super::Frequency;
+
+        const EPSILON: f64 = 1e-6f64;
+
+        #[test]
+        fn from_hz() {
+            let f = Frequency::from_hz(132_600_000);
+            assert_eq!(f.as_hz(), 132_600_000);
+            assert_eq!(f.as_khz(), 132_600);
+            assert!((f.as_mhz() - 132.600f64).abs() < EPSILON);
+        }
+
+        #[test]
+        fn from_khz() {
+            let f = Frequency::from_khz(132_600);
+            assert_eq!(f.as_hz(), 132_600_000);
+            assert_eq!(f.as_khz(), 132_600);
+            assert!((f.as_mhz() - 132.600f64).abs() < EPSILON);
+        }
+
+        #[test]
+        fn from_mhz() {
+            let f = Frequency::from_mhz(132.600f64);
+            assert_eq!(f.as_hz(), 132_600_000);
+            assert_eq!(f.as_khz(), 132_600);
+            assert!((f.as_mhz() - 132.600f64).abs() < EPSILON);
+        }
+
+        #[test]
+        fn from_mhz_rounding() {
+            let f = Frequency::from_mhz(132.600_000_1f64);
+            assert_eq!(f.as_hz(), 132_600_000);
+
+            let f = Frequency::from_mhz(132.600_000_5f64);
+            assert_eq!(f.as_hz(), 132_600_001);
+
+            let f = Frequency::from_mhz(132.600_000_9f64);
+            assert_eq!(f.as_hz(), 132_600_001);
+
+            let f = Frequency::from_mhz(132.600_001_0f64);
+            assert_eq!(f.as_hz(), 132_600_001);
+        }
+
+        #[test]
+        fn from_u64() {
+            let f = Frequency::from_hz(132_600_000);
+            assert_eq!(Frequency::from(132_600_000u64), f);
+        }
+
+        #[test]
+        fn from_f64() {
+            let f = Frequency::from_hz(132_600_000);
+            assert_eq!(Frequency::from(132.600f64), f);
+        }
+
+        #[test]
+        fn u64_from() {
+            let f = Frequency::from_hz(132_600_000);
+            assert_eq!(u64::from(f), 132_600_000);
+        }
+
+        #[test]
+        fn f64_from() {
+            let f = Frequency::from_hz(132_600_000);
+            assert!((f64::from(f) - 132.600f64).abs() < EPSILON);
+        }
+
+        #[test]
+        fn debug() {
+            let f = Frequency::from_hz(132_600_000);
+            assert_eq!(format!("{f:?}"), "Frequency(132.600 MHz)");
+        }
+
+        #[test]
+        fn display() {
+            let f = Frequency::from_hz(132_600_000);
+            assert_eq!(format!("{f}"), "132.600 MHz");
+        }
+    }
+}
