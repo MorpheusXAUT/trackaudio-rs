@@ -9,9 +9,9 @@ use std::time::Duration;
 use tokio::net::TcpStream;
 use tokio::sync::{broadcast, mpsc};
 use tokio::task::JoinHandle;
+use tokio_tungstenite::tungstenite::{Bytes, Message};
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
 use tokio_util::sync::CancellationToken;
-use tungstenite::{Bytes, Message};
 
 /// [`TrackAudioClient`] is a client for interacting with a TrackAudio instance via WebSockets.
 ///
