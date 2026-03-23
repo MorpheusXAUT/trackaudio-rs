@@ -31,7 +31,7 @@ tokio = { version = "1.50", features = ["macros", "rt", "time"] }
 tokio-tungstenite = "0.28"
 tokio-util = "0.7"
 tracing = { version = "0.1", optional = true }
-tungstenite = "0.28"
+tungstenite = "0.29"
 url = "2.5"
 
 [dev-dependencies]
