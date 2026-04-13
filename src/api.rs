@@ -1,6 +1,6 @@
 use crate::messages::commands::{
     AddStation, ChangeMainVolume, ChangeStationVolume, GetStationState, GetStationStates,
-    GetVoiceConnectedState,
+    GetVoiceConnectedState, SetStationState,
 };
 use crate::messages::events::StationState;
 use crate::{Command, Event, TrackAudioClient};
@@ -206,6 +206,59 @@ impl<'a> TrackAudioApi<'a> {
                 timeout,
             )
             .await
+    }
+
+    /// Updates a station's state and returns the resulting state.
+    ///
+    /// This function sends a [`Command::SetStationState`] command to modify one or more properties
+    /// of an existing station identified by its frequency. It waits for a corresponding
+    /// [`Event::StationStateUpdate`] event that matches the frequency and retrieves
+    /// the updated station state.
+    ///
+    /// Use [`SetStationState::new`] to construct the command with the builder pattern, or create
+    /// the struct directly.
+    ///
+    /// # Parameters
+    /// - `cmd`: A [`SetStationState`] command describing which fields to change.
+    /// - `timeout`: An optional `Duration` to specify the maximum time to wait
+    ///   for the response. If `None`, the function will wait indefinitely.
+    ///
+    /// # Returns
+    /// - `Ok(StationState)`: The updated state of the station if the operation was successful.
+    /// - `Err(TrackAudioError)`: An error if the operation failed or exceeded the provided timeout.
+    ///
+    /// # Errors
+    /// - [`TrackAudioError::Timeout`](crate::TrackAudioError::Timeout): If the operation times out.
+    /// - [`TrackAudioError::Send`](crate::TrackAudioError::Send): If an error occurs while sending the command.
+    /// - [`TrackAudioError::Receive`](crate::TrackAudioError::Receive): If an error occurs while receiving events.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// use std::time::Duration;
+    /// use trackaudio::Frequency;
+    /// use trackaudio::messages::commands::SetStationState;
+    ///
+    /// async fn example(api: trackaudio::TrackAudioApi<'_>) -> trackaudio::Result<()> {
+    ///   // Using the builder pattern
+    ///   let state = api
+    ///     .set_station_state(
+    ///         SetStationState::new(Frequency::from_mhz(132.600))
+    ///             .rx(true)
+    ///             .tx(true),
+    ///         Some(Duration::from_secs(1)),
+    ///     )
+    ///     .await?;
+    ///   Ok(())
+    /// }
+    /// ```
+    #[cfg_attr(feature = "tracing", tracing::instrument(skip(self), err))]
+    pub async fn set_station_state(
+        &self,
+        cmd: SetStationState,
+        timeout: Option<Duration>,
+    ) -> crate::Result<StationState> {
+        self.client.request(cmd, timeout).await
     }
 
     /// Retrieves the current state of all active stations.

@@ -229,6 +229,71 @@ pub struct SetStationState {
     pub headset: Option<BoolOrToggle>,
 }
 
+impl SetStationState {
+    /// Creates a new [`SetStationState`] command for the given frequency with all fields set to
+    /// `None` (no changes). Use the builder methods to set the desired fields.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use trackaudio::Frequency;
+    /// use trackaudio::messages::commands::SetStationState;
+    ///
+    /// let cmd = SetStationState::new(Frequency::from_mhz(132.600))
+    ///     .rx(true)
+    ///     .tx(true);
+    /// ```
+    #[must_use]
+    pub fn new(frequency: impl Into<Frequency>) -> Self {
+        Self {
+            frequency: frequency.into(),
+            is_output_muted: None,
+            rx: None,
+            tx: None,
+            xca: None,
+            headset: None,
+        }
+    }
+
+    /// Sets the RX (receive) state.
+    #[must_use]
+    pub fn rx(mut self, value: impl Into<BoolOrToggle>) -> Self {
+        self.rx = Some(value.into());
+        self
+    }
+
+    /// Sets the TX (transmit) state.
+    #[must_use]
+    pub fn tx(mut self, value: impl Into<BoolOrToggle>) -> Self {
+        self.tx = Some(value.into());
+        self
+    }
+
+    /// Sets the XCA (cross-coupling) state.
+    #[must_use]
+    pub fn xca(mut self, value: impl Into<BoolOrToggle>) -> Self {
+        self.xca = Some(value.into());
+        self
+    }
+
+    /// Sets the headset routing state.
+    ///
+    /// When `true`, audio is routed to the headset device only.
+    /// When `false`, audio is output to both speaker and headset.
+    #[must_use]
+    pub fn headset(mut self, value: impl Into<BoolOrToggle>) -> Self {
+        self.headset = Some(value.into());
+        self
+    }
+
+    /// Sets the output mute state.
+    #[must_use]
+    pub fn output_muted(mut self, value: impl Into<BoolOrToggle>) -> Self {
+        self.is_output_muted = Some(value.into());
+        self
+    }
+}
+
 impl Request for SetStationState {
     type Response = StationState;
 

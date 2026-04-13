@@ -8,15 +8,9 @@ async fn main() -> trackaudio::Result<()> {
     println!("Connected to TrackAudio");
 
     let state = client
-        .request(
-            SetStationState {
-                frequency: Frequency::from_mhz(121.500),
-                rx: Some(true.into()),
-                tx: None,
-                xca: None,
-                headset: None,
-                is_output_muted: None,
-            },
+        .api()
+        .set_station_state(
+            SetStationState::new(Frequency::from_mhz(121.500)).rx(true),
             Some(Duration::from_secs(1)),
         )
         .await?;
