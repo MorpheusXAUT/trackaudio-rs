@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.2](https://github.com/MorpheusXAUT/trackaudio-rs/compare/v0.2.1...v0.2.2)
+
+### Features
+
+
+- Add set_station_state to API ([#34](https://github.com/MorpheusXAUT/trackaudio-rs/pull/34)) - ([41e325c](https://github.com/MorpheusXAUT/trackaudio-rs/commit/41e325c239e34328f28719ef892f3d57fdd8261c))
+
+
 ## [0.2.1](https://github.com/MorpheusXAUT/trackaudio-rs/compare/v0.2.0...v0.2.1)
 
 ### Bug Fixes
