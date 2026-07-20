@@ -1,3 +1,10 @@
+[workspace]
+# Only open a release PR when at least one commit since the last release is
+# actually releasable. Without this, skipped changelog commit types (chore, ci,
+# refactor, style, test, build) still trigger a version bump + release PR.
+# Matches the non-skipped groups from [changelog].commit_parsers below.
+release_commits = "^(feat|fix|perf|revert)[(:!]"
+
 [changelog]
 header = """# Changelog
 
