@@ -2,8 +2,10 @@
 # Only open a release PR when at least one commit since the last release is
 # actually releasable. Without this, skipped changelog commit types (chore, ci,
 # refactor, style, test, build) still trigger a version bump + release PR.
-# Matches the non-skipped groups from [changelog].commit_parsers below.
-release_commits = "^(feat|fix|perf|revert)[(:!]"
+# Matches the non-skipped groups from [changelog].commit_parsers below, plus any
+# breaking change regardless of its type: a `refactor!:` is skipped as a
+# refactor but must never be skipped as a release.
+release_commits = "^(feat|fix|perf|revert)[(:!]|^\\w+(\\(.+\\))?!:"
 
 [changelog]
 header = """# Changelog
@@ -54,12 +56,16 @@ body = """
 """
 
 commit_parsers = [
-    { message = "^feat", group = "<!-- 0 -->Features" },
-    { message = "^fix", group = "<!-- 1 -->Bug Fixes" },
-    { message = "^perf", group = "<!-- 2 -->Performance" },
-    { body = ".*security", group = "<!-- 3 -->Security" },
-    { message = "^revert", group = "<!-- 4 -->Revert" },
-    { message = "^docs?", group = "<!-- 5 -->Documentation" },
+    # Breaking changes are matched first so they are grouped by their impact
+    # rather than their type. Without this a `refactor!:` would be dropped by
+    # the `^refactor` skip rule below and vanish from the changelog.
+    { message = "^\\w+(\\(.+\\))?!:", group = "<!-- 0 -->Breaking changes" },
+    { message = "^feat", group = "<!-- 1 -->Features" },
+    { message = "^fix", group = "<!-- 2 -->Bug Fixes" },
+    { message = "^perf", group = "<!-- 3 -->Performance" },
+    { body = ".*security", group = "<!-- 4 -->Security" },
+    { message = "^revert", group = "<!-- 5 -->Revert" },
+    { message = "^docs?", group = "<!-- 6 -->Documentation" },
     { message = "^build", skip = true },
     { message = "^chore", skip = true },
     { message = "^ci", skip = true },
