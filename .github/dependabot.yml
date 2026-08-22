@@ -8,6 +8,10 @@ updates:
       interval: weekly
       day: monday
       time: "05:30" # UTC
+    # Wait a week before proposing a newly published version. That is the
+    # window in which a compromised release is usually caught and yanked.
+    cooldown:
+      default-days: 7
     open-pull-requests-limit: 20
     rebase-strategy: auto
     versioning-strategy: auto
@@ -19,6 +23,8 @@ updates:
       interval: weekly
       day: monday
       time: "06:30" # UTC
+    cooldown:
+      default-days: 7
     open-pull-requests-limit: 10
     rebase-strategy: auto
     labels: ["dependencies"]
