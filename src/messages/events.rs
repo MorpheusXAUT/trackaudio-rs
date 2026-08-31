@@ -158,6 +158,16 @@ impl<'de> Deserialize<'de> for Event {
             T: serde::de::DeserializeOwned,
             E: serde::de::Error,
         {
+            // TrackAudio sends `"value": {}` for payload-less events such as `kTxBegin`, but a
+            // stricter sender might omit it entirely. Treat that as an empty object so those
+            // events still decode; payloads that do need fields still fail with a missing-field
+            // error rather than a confusing type error.
+            let value = if value.is_null() {
+                serde_json::Value::Object(serde_json::Map::new())
+            } else {
+                value
+            };
+
             serde_json::from_value(value)
                 .map_err(|err| E::custom(format_args!("invalid `value` for {msg_type}: {err}")))
         }
@@ -704,6 +714,33 @@ mod tests {
                     value: serde_json::json!({"whatever": 1}),
                 }
             );
+        }
+
+        /// Payload-less events decode even when `value` is absent or null, not just when it is
+        /// the empty object TrackAudio actually sends.
+        #[test]
+        fn payload_less_events_tolerate_missing_value() {
+            for json in [
+                r#"{"type":"kTxBegin","value":{}}"#,
+                r#"{"type":"kTxBegin","value":null}"#,
+                r#"{"type":"kTxBegin"}"#,
+            ] {
+                assert_eq!(
+                    serde_json::from_str::<Event>(json).unwrap(),
+                    Event::TxBegin(super::TxBegin {}),
+                    "failed for {json}"
+                );
+            }
+        }
+
+        /// A payload that genuinely needs fields still reports them as missing rather than as a
+        /// confusing type error when `value` is absent.
+        #[test]
+        fn missing_value_for_a_real_payload_reports_missing_field() {
+            let err = serde_json::from_str::<Event>(r#"{"type":"kRxBegin"}"#)
+                .unwrap_err()
+                .to_string();
+            assert!(err.contains("missing field"), "unexpected error: {err}");
         }
 
         /// An unknown event without a `value` is still recognized, with a null payload.
