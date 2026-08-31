@@ -45,6 +45,9 @@ impl TrackAudioClient {
     ///
     /// # Errors
     /// - [`TrackAudioError::Websocket`](TrackAudioError::WebSocket): If the WebSocket connection failed
+    // `async` without an `.await`: connecting happens in the spawned task, but the signature is
+    // part of the public API and matches `connect_default`/`connect_url`, so it stays.
+    #[allow(clippy::unused_async, clippy::unused_async_trait_impl)]
     #[cfg_attr(feature = "tracing", tracing::instrument(err))]
     pub async fn connect(config: TrackAudioConfig) -> Result<Self> {
         let (command_tx, command_rx) = mpsc::channel::<Command>(config.command_channel_capacity);
@@ -218,6 +221,7 @@ impl TrackAudioClient {
                 .await
                 .map_err(|_| TrackAudioError::Timeout)?
         } else {
+            #[cfg(feature = "tracing")]
             tracing::trace!("Waiting for response");
             fut.await
         }
@@ -540,6 +544,7 @@ impl TrackAudioClient {
                 () = shutdown.cancelled() => {
                     #[cfg(feature = "tracing")]
                     tracing::debug!("Shutdown requested, sending Close message");
+                    #[cfg_attr(not(feature = "tracing"), allow(unused_variables))]
                     if let Err(err) = ws_tx.send(Message::Close(None)).await {
                         #[cfg(feature = "tracing")]
                         tracing::debug!(?err, "Failed to send Close message");
@@ -550,6 +555,7 @@ impl TrackAudioClient {
                 Some(()) = reconnect_rx.recv() => {
                     #[cfg(feature = "tracing")]
                     tracing::debug!("Manual reconnection requested, closing connection");
+                    #[cfg_attr(not(feature = "tracing"), allow(unused_variables))]
                     if let Err(err) = ws_tx.send(Message::Close(None)).await {
                         #[cfg(feature = "tracing")]
                         tracing::debug!(?err, "Failed to send Close message");
@@ -600,6 +606,7 @@ impl TrackAudioClient {
                         Some(Ok(Message::Text(json))) => {
                             match serde_json::from_str::<Event>(&json) {
                                 Ok(event) => {
+                                    #[cfg_attr(not(feature = "tracing"), allow(unused_variables))]
                                     if let Err(err) = event_tx.send(event) {
                                         #[cfg(feature = "tracing")]
                                         tracing::debug!(?err, "Failed to send event");
@@ -644,6 +651,7 @@ impl TrackAudioClient {
                             };
                             return DisconnectReason::ClosedByPeer {code, reason};
                         },
+                        #[cfg_attr(not(feature = "tracing"), allow(unused_variables))]
                         Some(Ok(other)) => {
                             #[cfg(feature = "tracing")]
                             tracing::trace!(?other, "Received unexpected WebSocket message");
@@ -664,6 +672,7 @@ impl TrackAudioClient {
         }
     }
 
+    #[cfg_attr(not(feature = "tracing"), allow(unused_variables))]
     fn send_client_event(event_tx: &broadcast::Sender<Event>, client_event: ClientEvent) {
         if let Err(err) = event_tx.send(Event::Client(client_event)) {
             #[cfg(feature = "tracing")]
