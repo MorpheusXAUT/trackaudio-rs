@@ -168,6 +168,9 @@
 //!
 //!     let client = TrackAudioClient::connect(config).await?;
 //!
+//!     // `connect` returns before the connection is up; wait for it if you need it ready
+//!     client.wait_connected(Some(Duration::from_secs(5))).await?;
+//!
 //!     // Monitor connection state changes
 //!     let mut events = client.subscribe();
 //!     while let Ok(event) = events.recv().await {

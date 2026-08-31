@@ -7,7 +7,7 @@ use futures_util::{SinkExt, StreamExt};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::net::TcpStream;
-use tokio::sync::{broadcast, mpsc};
+use tokio::sync::{broadcast, mpsc, watch};
 use tokio::task::JoinHandle;
 use tokio_tungstenite::tungstenite::{Bytes, Message};
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
@@ -27,6 +27,7 @@ pub struct TrackAudioClient {
 struct Inner {
     command_tx: mpsc::Sender<Command>,
     event_tx: broadcast::Sender<Event>,
+    connection_state: watch::Receiver<ConnectionState>,
     shutdown: CancellationToken,
     reconnect_tx: mpsc::Sender<()>,
     task: JoinHandle<()>,
@@ -45,10 +46,12 @@ impl TrackAudioClient {
     /// WebSocket connection to come up, and a returned client is therefore not yet known to be
     /// connected. Commands sent before the connection is up are queued, not rejected.
     ///
-    /// To observe the actual connection state, subscribe with [`TrackAudioClient::subscribe()`]
-    /// and watch for [`ClientEvent::ConnectionStateChanged`], which reports
-    /// [`ConnectionState::Connected`] once the connection succeeds and
-    /// [`ConnectionState::Disconnected`] (with a [`DisconnectReason`]) when it fails.
+    /// To wait for the connection, use [`wait_connected`](Self::wait_connected); to check it
+    /// without waiting, [`connection_state`](Self::connection_state). To follow every transition,
+    /// subscribe with [`TrackAudioClient::subscribe()`] and watch for
+    /// [`ClientEvent::ConnectionStateChanged`], which reports [`ConnectionState::Connected`] once
+    /// the connection succeeds and [`ConnectionState::Disconnected`] (with a
+    /// [`DisconnectReason`]) when it fails.
     ///
     /// # Returns
     /// - `Ok(Self)`: The client, with its background task spawned.
@@ -64,6 +67,8 @@ impl TrackAudioClient {
         let (command_tx, command_rx) = mpsc::channel::<Command>(config.command_channel_capacity);
         let (event_tx, _) = broadcast::channel::<Event>(config.event_channel_capacity);
         let (reconnect_tx, reconnect_rx) = mpsc::channel::<()>(1);
+        let (connection_state_tx, connection_state) =
+            watch::channel(ConnectionState::Connecting { attempt: 1 });
         let shutdown = CancellationToken::new();
 
         #[cfg(feature = "tracing")]
@@ -71,6 +76,7 @@ impl TrackAudioClient {
         let task = tokio::runtime::Handle::current().spawn(Self::run_client_with_reconnect(
             command_rx,
             event_tx.clone(),
+            connection_state_tx,
             reconnect_rx,
             shutdown.clone(),
             config,
@@ -80,6 +86,7 @@ impl TrackAudioClient {
             inner: Arc::new(Inner {
                 command_tx,
                 event_tx,
+                connection_state,
                 shutdown,
                 reconnect_tx,
                 task,
@@ -332,6 +339,144 @@ impl TrackAudioClient {
         self.inner.event_tx.subscribe()
     }
 
+    /// Returns the client's current connection state.
+    ///
+    /// This is a cheap, non-blocking snapshot of the same state reported by
+    /// [`ClientEvent::ConnectionStateChanged`], for callers that need to poll rather than
+    /// subscribe. It is always up to date by the time that event is observed.
+    ///
+    /// [`ConnectionState::Disconnected`] does not imply a retry is pending; use
+    /// [`wait_connected`](Self::wait_connected) to tell a client that is still trying from one
+    /// that has stopped.
+    ///
+    /// The exception is a client that is no longer running, after
+    /// [`shutdown`](Self::shutdown) or [`terminate`](Self::terminate) or if its task ended
+    /// unexpectedly. [`ConnectionState::Disconnected`] is then reported directly, so it can
+    /// arrive before the matching event, or without one at all.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// use std::time::Duration;
+    /// use trackaudio::{ConnectionState, TrackAudioClient};
+    ///
+    /// # async fn example() -> trackaudio::Result<()> {
+    /// let client = TrackAudioClient::connect_default().await?;
+    /// client.wait_connected(Some(Duration::from_secs(5))).await?;
+    ///
+    /// // Later, to re-check without waiting:
+    /// if client.connection_state() != ConnectionState::Connected {
+    ///     println!("connection dropped");
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn connection_state(&self) -> ConnectionState {
+        let state = self.inner.connection_state.borrow().clone();
+
+        // A task that was aborted by `terminate` or that unwound on a panic publishes no final
+        // state, so a live-looking one can outlive the client that produced it.
+        let client_gone = self.inner.shutdown.is_cancelled()
+            || self.inner.connection_state.has_changed().is_err();
+        if client_gone
+            && !matches!(
+                state,
+                ConnectionState::Disconnected { .. } | ConnectionState::ReconnectFailed { .. }
+            )
+        {
+            return ConnectionState::Disconnected {
+                reason: DisconnectReason::Shutdown,
+            };
+        }
+
+        state
+    }
+
+    /// Waits until the client is connected to the TrackAudio instance.
+    ///
+    /// [`connect`](Self::connect) returns before the connection is established, so this is the
+    /// way to wait for one. Returns immediately if the client is already connected.
+    ///
+    /// A lost connection does not end the wait: with auto-reconnect enabled a
+    /// [`ConnectionState::Disconnected`] is transient, and this keeps waiting for the retry to
+    /// succeed. That is what makes it safe to call before TrackAudio has been started.
+    ///
+    /// # Parameters
+    /// - `timeout`: How long to wait. If `None`, waits indefinitely. Prefer a timeout unless the
+    ///   caller genuinely wants to block until TrackAudio appears.
+    ///
+    /// # Returns
+    /// - `Ok(())`: The client is connected.
+    /// - `Err(TrackAudioError)`: The wait timed out or the connection can no longer be made.
+    ///
+    /// # Errors
+    /// - [`TrackAudioError::Timeout`]: If the timeout elapsed before connecting.
+    /// - [`TrackAudioError::ClientTaskTerminated`]: If the client gave up (reconnection attempts
+    ///   exhausted, auto-reconnect disabled after a failure, or the client was shut down).
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// use std::time::Duration;
+    /// use trackaudio::TrackAudioClient;
+    ///
+    /// # async fn example() -> trackaudio::Result<()> {
+    /// let client = TrackAudioClient::connect_default().await?;
+    /// client.wait_connected(Some(Duration::from_secs(5))).await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[cfg_attr(
+        feature = "tracing",
+        tracing::instrument(skip(self), err(level = "debug"))
+    )]
+    pub async fn wait_connected(&self, timeout: Option<Duration>) -> Result<()> {
+        let mut rx = self.inner.connection_state.clone();
+        let shutdown = self.inner.shutdown.clone();
+
+        // Checked before the state, which a dead client can leave stale at `Connected`.
+        if shutdown.is_cancelled() || rx.has_changed().is_err() {
+            return Err(TrackAudioError::ClientTaskTerminated);
+        }
+
+        // An already-connected client publishes no further transition, so awaiting one hangs.
+        if *rx.borrow_and_update() == ConnectionState::Connected {
+            return Ok(());
+        }
+
+        let fut = async move {
+            loop {
+                let changed = tokio::select! {
+                    () = shutdown.cancelled() => return Err(TrackAudioError::ClientTaskTerminated),
+                    res = rx.changed() => res,
+                };
+                if changed.is_err() {
+                    // The sender lives in the client task, so this means the task is gone.
+                    return Err(TrackAudioError::ClientTaskTerminated);
+                }
+
+                match &*rx.borrow_and_update() {
+                    ConnectionState::Connected => return Ok(()),
+                    #[cfg_attr(not(feature = "tracing"), allow(unused_variables))]
+                    ConnectionState::ReconnectFailed { attempts } => {
+                        #[cfg(feature = "tracing")]
+                        tracing::debug!(?attempts, "Giving up waiting for connection");
+                        return Err(TrackAudioError::ClientTaskTerminated);
+                    }
+                    _ => {}
+                }
+            }
+        };
+
+        match timeout {
+            Some(timeout) => tokio::time::timeout(timeout, fut)
+                .await
+                .map_err(|_| TrackAudioError::Timeout)?,
+            None => fut.await,
+        }
+    }
+
     /// Gracefully shuts down the client and disconnects from the TrackAudio instance.
     pub fn shutdown(&self) {
         #[cfg(feature = "tracing")]
@@ -436,6 +581,7 @@ impl TrackAudioClient {
     async fn run_client_with_reconnect(
         mut command_rx: mpsc::Receiver<Command>,
         event_tx: broadcast::Sender<Event>,
+        connection_state_tx: watch::Sender<ConnectionState>,
         mut reconnect_rx: mpsc::Receiver<()>,
         shutdown: CancellationToken,
         config: TrackAudioConfig,
@@ -449,9 +595,10 @@ impl TrackAudioClient {
         while should_reconnect {
             attempt += 1;
 
-            Self::send_client_event(
+            Self::set_connection_state(
                 &event_tx,
-                ClientEvent::ConnectionStateChanged(ConnectionState::Connecting { attempt }),
+                &connection_state_tx,
+                ConnectionState::Connecting { attempt },
             );
 
             match Self::establish_connection(&config.url).await {
@@ -460,9 +607,10 @@ impl TrackAudioClient {
                     tracing::info!(?attempt, "Connected to TrackAudio");
                     attempt = 0;
 
-                    Self::send_client_event(
+                    Self::set_connection_state(
                         &event_tx,
-                        ClientEvent::ConnectionStateChanged(ConnectionState::Connected),
+                        &connection_state_tx,
+                        ConnectionState::Connected,
                     );
 
                     let (ws_tx, ws_rx) = ws_stream.split();
@@ -481,11 +629,12 @@ impl TrackAudioClient {
                     #[cfg(feature = "tracing")]
                     tracing::info!(?attempt, "Disconnected from TrackAudio");
 
-                    Self::send_client_event(
+                    Self::set_connection_state(
                         &event_tx,
-                        ClientEvent::ConnectionStateChanged(ConnectionState::Disconnected {
+                        &connection_state_tx,
+                        ConnectionState::Disconnected {
                             reason: disconnect_reason.clone(),
-                        }),
+                        },
                     );
 
                     should_reconnect = Self::should_attempt_reconnect(&shutdown, &config);
@@ -502,22 +651,22 @@ impl TrackAudioClient {
                                 ?max_attempts,
                                 "Max reconnection attempts reached"
                             );
-                            Self::send_client_event(
+                            Self::set_connection_state(
                                 &event_tx,
-                                ClientEvent::ConnectionStateChanged(
-                                    ConnectionState::ReconnectFailed { attempts: attempt },
-                                ),
+                                &connection_state_tx,
+                                ConnectionState::ReconnectFailed { attempts: attempt },
                             );
                             should_reconnect = false;
                             continue;
                         }
                     }
 
-                    Self::send_client_event(
+                    Self::set_connection_state(
                         &event_tx,
-                        ClientEvent::ConnectionStateChanged(ConnectionState::Disconnected {
+                        &connection_state_tx,
+                        ConnectionState::Disconnected {
                             reason: DisconnectReason::ConnectionFailed(err.to_string()),
-                        }),
+                        },
                     );
 
                     should_reconnect = Self::should_attempt_reconnect(&shutdown, &config);
@@ -525,37 +674,69 @@ impl TrackAudioClient {
             }
 
             if should_reconnect {
-                let backoff = Self::calculate_backoff(attempt, &config);
-
-                #[cfg(feature = "tracing")]
-                tracing::debug!(?attempt, ?backoff, "Waiting before attempting reconnect");
-
-                Self::send_client_event(
+                (attempt, should_reconnect) = Self::await_backoff(
                     &event_tx,
-                    ClientEvent::ConnectionStateChanged(ConnectionState::Reconnecting {
-                        attempt: attempt + 1,
-                        next_delay: backoff,
-                    }),
-                );
-
-                tokio::select! {
-                    () = tokio::time::sleep(backoff) => {},
-                    Some(()) = reconnect_rx.recv() => {
-                        #[cfg(feature = "tracing")]
-                        tracing::debug!("Manual reconnection requested during backoff");
-                        attempt = 0;
-                    }
-                    () = shutdown.cancelled() => {
-                        #[cfg(feature = "tracing")]
-                        tracing::debug!("Shutdown requested during backoff");
-                        should_reconnect = false;
-                    }
-                }
+                    &connection_state_tx,
+                    &mut reconnect_rx,
+                    &shutdown,
+                    &config,
+                    attempt,
+                )
+                .await;
             }
         }
 
         #[cfg(feature = "tracing")]
         tracing::debug!("Client task with reconnection completed");
+    }
+
+    /// Returns the attempt counter, which a manual reconnect resets to retry immediately, and
+    /// whether the loop should keep going.
+    async fn await_backoff(
+        event_tx: &broadcast::Sender<Event>,
+        connection_state_tx: &watch::Sender<ConnectionState>,
+        reconnect_rx: &mut mpsc::Receiver<()>,
+        shutdown: &CancellationToken,
+        config: &TrackAudioConfig,
+        mut attempt: usize,
+    ) -> (usize, bool) {
+        let mut should_reconnect = true;
+        let backoff = Self::calculate_backoff(attempt, config);
+
+        #[cfg(feature = "tracing")]
+        tracing::debug!(?attempt, ?backoff, "Waiting before attempting reconnect");
+
+        Self::set_connection_state(
+            event_tx,
+            connection_state_tx,
+            ConnectionState::Reconnecting {
+                attempt: attempt + 1,
+                next_delay: backoff,
+            },
+        );
+
+        tokio::select! {
+            () = tokio::time::sleep(backoff) => {},
+            Some(()) = reconnect_rx.recv() => {
+                #[cfg(feature = "tracing")]
+                tracing::debug!("Manual reconnection requested during backoff");
+                attempt = 0;
+            }
+            () = shutdown.cancelled() => {
+                #[cfg(feature = "tracing")]
+                tracing::debug!("Shutdown requested during backoff");
+                Self::set_connection_state(
+                    event_tx,
+                    connection_state_tx,
+                    ConnectionState::Disconnected {
+                        reason: DisconnectReason::Shutdown,
+                    },
+                );
+                should_reconnect = false;
+            }
+        }
+
+        (attempt, should_reconnect)
     }
 
     #[allow(clippy::too_many_lines)]
@@ -708,6 +889,17 @@ impl TrackAudioClient {
         }
     }
 
+    /// Updates the watch before broadcasting, so a consumer reacting to the event never reads
+    /// the previous state back out of `connection_state`.
+    fn set_connection_state(
+        event_tx: &broadcast::Sender<Event>,
+        connection_state_tx: &watch::Sender<ConnectionState>,
+        state: ConnectionState,
+    ) {
+        connection_state_tx.send_replace(state.clone());
+        Self::send_client_event(event_tx, ClientEvent::ConnectionStateChanged(state));
+    }
+
     #[cfg_attr(not(feature = "tracing"), allow(unused_variables))]
     fn send_client_event(event_tx: &broadcast::Sender<Event>, client_event: ClientEvent) {
         if let Err(err) = event_tx.send(Event::Client(client_event)) {
@@ -727,10 +919,132 @@ impl Drop for Inner {
 
 #[cfg(test)]
 mod tests {
-    use crate::TrackAudioClient;
-    use crate::TrackAudioError;
+    use crate::{
+        ClientEvent, ConnectionState, DisconnectReason, Event, TrackAudioClient, TrackAudioConfig,
+        TrackAudioError,
+    };
     use assert_matches::assert_matches;
+    use std::time::Duration;
     use test_log::test;
+    use tokio::sync::broadcast;
+
+    /// Port 1 on loopback: reserved, never bound, so connecting reliably fails fast.
+    fn dead_endpoint() -> TrackAudioConfig {
+        TrackAudioConfig::new("ws://127.0.0.1:1/ws").expect("valid URL")
+    }
+
+    /// Reads the event stream up to the next connection state transition.
+    async fn next_state(events: &mut broadcast::Receiver<Event>) -> ConnectionState {
+        loop {
+            let event = tokio::time::timeout(Duration::from_secs(5), events.recv())
+                .await
+                .expect("client should keep emitting")
+                .expect("event stream should stay open");
+            if let Event::Client(ClientEvent::ConnectionStateChanged(state)) = event {
+                return state;
+            }
+        }
+    }
+
+    /// A client that has not reached TrackAudio yet must never report itself as connected.
+    #[test(tokio::test)]
+    async fn connection_state_is_not_connected_before_connecting() {
+        let client = TrackAudioClient::connect(dead_endpoint())
+            .await
+            .expect("connect should not fail");
+
+        assert_ne!(client.connection_state(), ConnectionState::Connected);
+    }
+
+    /// `wait_connected` must give up on the timeout rather than hang when nothing is listening.
+    #[test(tokio::test)]
+    async fn wait_connected_times_out_when_nothing_is_listening() {
+        let client = TrackAudioClient::connect(dead_endpoint())
+            .await
+            .expect("connect should not fail");
+
+        let err = client
+            .wait_connected(Some(Duration::from_millis(150)))
+            .await
+            .expect_err("should not connect");
+        assert_matches!(err, TrackAudioError::Timeout);
+    }
+
+    /// Once reconnection attempts are exhausted the client task ends, so a pending wait has to
+    /// resolve instead of hanging until its timeout.
+    #[test(tokio::test)]
+    async fn wait_connected_gives_up_once_reconnects_are_exhausted() {
+        let config = dead_endpoint()
+            .with_max_reconnect_attempts(Some(1))
+            .with_backoff_config(Duration::from_millis(10), Duration::from_millis(10), 1.0);
+        let client = TrackAudioClient::connect(config)
+            .await
+            .expect("connect should not fail");
+
+        let err = client
+            .wait_connected(Some(Duration::from_secs(10)))
+            .await
+            .expect_err("should give up");
+        assert_matches!(err, TrackAudioError::ClientTaskTerminated);
+    }
+
+    /// `terminate` aborts the task mid-flight, so the last published state outlives the client
+    /// and must not still be reported as live.
+    #[test(tokio::test)]
+    async fn connection_state_is_not_live_after_terminate() {
+        let client = TrackAudioClient::connect(dead_endpoint())
+            .await
+            .expect("connect should not fail");
+        client.clone().terminate();
+
+        assert_matches!(
+            client.connection_state(),
+            ConnectionState::Disconnected {
+                reason: DisconnectReason::Shutdown
+            }
+        );
+        assert_matches!(
+            client.wait_connected(Some(Duration::from_millis(50))).await,
+            Err(TrackAudioError::ClientTaskTerminated)
+        );
+    }
+
+    /// Asserted on the event stream, not `connection_state`, which synthesizes a terminal state
+    /// for any shut-down client and would pass with the broadcast removed.
+    #[test(tokio::test)]
+    async fn shutdown_during_backoff_broadcasts_a_final_state() {
+        let config = dead_endpoint().with_backoff_config(
+            Duration::from_secs(30),
+            Duration::from_secs(30),
+            1.0,
+        );
+        let client = TrackAudioClient::connect(config)
+            .await
+            .expect("connect should not fail");
+
+        // Polled rather than read off the stream, so the test does not depend on subscribing
+        // before the task has had a chance to run.
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while !matches!(
+                client.connection_state(),
+                ConnectionState::Reconnecting { .. }
+            ) {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("client should reach backoff");
+
+        let mut events = client.subscribe();
+        client.shutdown();
+
+        assert_matches!(
+            next_state(&mut events).await,
+            ConnectionState::Disconnected {
+                reason: DisconnectReason::Shutdown
+            }
+        );
+    }
 
     #[test(tokio::test)]
     async fn connect_url_empty() {
