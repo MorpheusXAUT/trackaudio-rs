@@ -73,9 +73,26 @@ impl<'a> TrackAudioApi<'a> {
     /// Adds a new station with the provided callsign and returns its state.
     ///
     /// This function sends a [`Command::AddStation`] command to request the addition of
-    /// a new station identified by the given `callsign`. It waits for a corresponding
-    /// [`Event::StationStateUpdate`] event that matches the callsign and retrieves
-    /// the updated station state.
+    /// a new station identified by the given `callsign`, and waits for TrackAudio's response.
+    ///
+    /// # How complete is the returned state?
+    ///
+    /// This depends on what TrackAudio has to do, because the two cases are answered with
+    /// different events:
+    ///
+    /// - **Station already monitored**: answered with [`Event::StationStateUpdate`], and the
+    ///   returned [`StationState`] is fully populated.
+    /// - **Station looked up and added**: answered with [`Event::StationAdded`], which carries
+    ///   only the callsign and frequency. `rx`, `tx`, `xc`, `xca`, `headset`, `is_output_muted`
+    ///   and `output_volume` are all [`None`]: not yet known, rather than known to be unset.
+    ///   Call [`get_station_state`](Self::get_station_state) afterwards if you need them.
+    ///
+    /// # Unknown callsigns hang
+    ///
+    /// If TrackAudio cannot find the callsign it reports the failure to its own UI and sends
+    /// **nothing** over the WebSocket connection, so there is no response to wait for. Passing
+    /// `timeout: None` for a callsign that turns out not to exist waits forever. Always pass a
+    /// timeout unless you already know the station exists.
     ///
     /// # Parameters
     /// - `callsign`: Callsign of the station to be added, e.g. `"LOVV_CTR"`.
@@ -83,8 +100,7 @@ impl<'a> TrackAudioApi<'a> {
     ///   for the response. If `None`, the function will wait indefinitely.
     ///
     /// # Returns
-    /// - `Ok(StationState)`: The state of the newly added station if the operation
-    ///   was successful.
+    /// - `Ok(StationState)`: The state of the added station, see above for how complete it is.
     /// - `Err(TrackAudioError)`: An error if the operation failed or exceeded the provided timeout.
     ///
     /// # Errors

@@ -47,15 +47,20 @@ pub enum Event {
 
     /// Station added.
     ///
-    /// Emitted when a new station is successfully added to TrackAudio, e.g., as a response to
-    /// [`Command::AddStation`].
+    /// Emitted when a new station is successfully added to TrackAudio. This is the direct
+    /// response to [`Command::AddStation`] for a station TrackAudio had to look up; one it
+    /// already monitors is answered with [`Event::StationStateUpdate`] instead.
     StationAdded(StationAdded),
 
     /// A (monitored) station's state has been updated.
     ///
     /// Emitted when any property of a station changes (e.g., rx/tx/xc state, volume, etc.), or
-    /// after a station is added or removed from the instance. Emitted as a response to
-    /// [`Command::AddStation`], including the info whether the station was found.
+    /// after a station is added or removed from the instance.
+    ///
+    /// Emitted as a response to [`Command::AddStation`] only when the station is *already*
+    /// monitored; a station that has to be looked up is answered with [`Event::StationAdded`]
+    /// instead. A response to [`Command::GetStationState`] for a callsign TrackAudio does not
+    /// know carries [`is_available`](StationState::is_available) set to `false`.
     StationStateUpdate(StationState),
 
     /// An (unassociated) Frequency has been removed.
@@ -158,10 +163,8 @@ impl<'de> Deserialize<'de> for Event {
             T: serde::de::DeserializeOwned,
             E: serde::de::Error,
         {
-            // TrackAudio sends `"value": {}` for payload-less events such as `kTxBegin`, but a
-            // stricter sender might omit it entirely. Treat that as an empty object so those
-            // events still decode; payloads that do need fields still fail with a missing-field
-            // error rather than a confusing type error.
+            // `kTxBegin` and friends decode from `{}`, so a null or absent value must not be
+            // passed through as one: it would fail as a type error instead.
             let value = if value.is_null() {
                 serde_json::Value::Object(serde_json::Map::new())
             } else {
@@ -256,6 +259,9 @@ pub struct StationState {
 
     /// Whether the station is available (found in the VATSIM audio database). If `false`, all
     /// other information will be `None`.
+    ///
+    /// Only ever `false` in a response to [`Command::GetStationState`]. TrackAudio answers
+    /// [`Command::AddStation`] for an unknown callsign with no WebSocket message at all.
     pub is_available: bool,
 
     /// The frequency the station is tuned to.
@@ -560,12 +566,8 @@ pub enum ClientEvent {
 
 #[cfg(test)]
 mod tests {
-    //! Deserialization tests using payloads taken verbatim from TrackAudio's `backend/src/sdk.cpp`.
-    //!
-    //! TrackAudio emits an identical WebSocket wire format on 1.3.x and 1.4.0, so the samples below
-    //! apply to both. Fields TrackAudio only sends conditionally are modelled as `Option`, and no
-    //! payload struct uses `deny_unknown_fields`, so older instances (omitting a field) and newer
-    //! ones (adding a field) both keep deserializing.
+    //! Payloads are taken verbatim from TrackAudio's `backend/src/sdk.cpp`. The wire format is
+    //! identical on 1.3.x and 1.4.0, so they apply to both.
 
     use super::*;
 
@@ -640,9 +642,7 @@ mod tests {
     mod version_compatibility {
         use super::{Event, Frequency, StationState};
 
-        /// A station monitoring 122.800 MHz is called `UNICOM` up to 1.3.x and `ADVISORY` from
-        /// 1.4.0 onwards. Both must deserialize; the callsign is passed through untouched so
-        /// consumers can match on either.
+        /// 122.800 MHz is `UNICOM` up to 1.3.x and `ADVISORY` from 1.4.0; both must decode.
         #[test]
         fn unicom_and_advisory_callsigns_both_deserialize() {
             for callsign in ["UNICOM", "ADVISORY"] {
@@ -659,8 +659,7 @@ mod tests {
             }
         }
 
-        /// Older instances omit fields newer ones send. Every such field is an `Option`, so a
-        /// minimal payload must still deserialize rather than erroring.
+        /// Fields an older TrackAudio omits must decode as `None`, not error.
         #[test]
         fn missing_optional_fields_deserialize_as_none() {
             let json = r#"{"type":"kStationStateUpdate","value":{"isAvailable":false}}"#;
@@ -686,8 +685,7 @@ mod tests {
             );
         }
 
-        /// Newer instances may add fields this crate does not model yet. No payload struct uses
-        /// `deny_unknown_fields`, so they must be ignored rather than failing the whole event.
+        /// Fields added by a newer TrackAudio must not fail the whole event.
         #[test]
         fn unknown_fields_are_ignored() {
             let json = r#"{"type":"kRxBegin","value":{"callsign":"AFR001","pFrequencyHz":123000000,"activeTransmitters":["AFR001"],"somethingNew":{"rco":true}}}"#;
@@ -700,9 +698,7 @@ mod tests {
             assert_eq!(rx.frequency, Frequency::from_hz(123_000_000));
         }
 
-        /// Message types this crate does not know fall back to [`Event::Unknown`] instead of
-        /// erroring, so a newer TrackAudio cannot break an older client. The raw message is
-        /// preserved so consumers can log what they received.
+        /// A newer TrackAudio adding an event must not break an older client.
         #[test]
         fn unknown_event_types_fall_back() {
             let json = r#"{"type":"kSomeFutureEvent","value":{"whatever":1}}"#;
@@ -716,8 +712,7 @@ mod tests {
             );
         }
 
-        /// Payload-less events decode even when `value` is absent or null, not just when it is
-        /// the empty object TrackAudio actually sends.
+        /// TrackAudio sends `{}`, but absent and null must decode too.
         #[test]
         fn payload_less_events_tolerate_missing_value() {
             for json in [
@@ -733,8 +728,7 @@ mod tests {
             }
         }
 
-        /// A payload that genuinely needs fields still reports them as missing rather than as a
-        /// confusing type error when `value` is absent.
+        /// The null-value allowance must not turn a real payload error into a type error.
         #[test]
         fn missing_value_for_a_real_payload_reports_missing_field() {
             let err = serde_json::from_str::<Event>(r#"{"type":"kRxBegin"}"#)
@@ -760,9 +754,7 @@ mod tests {
             }
         }
 
-        /// A *known* event type with a malformed payload must still be an error, so real protocol
-        /// breakage surfaces as [`ClientEvent::EventDeserializationFailed`] rather than being
-        /// silently swallowed into [`Event::Unknown`].
+        /// Real protocol breakage must surface as an error, not be swallowed into `Unknown`.
         #[test]
         fn known_event_with_bad_payload_still_errors() {
             let json = r#"{"type":"kRxBegin","value":{"callsign":42}}"#;

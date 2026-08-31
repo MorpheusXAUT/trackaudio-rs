@@ -20,11 +20,10 @@ This crate provides a high-level, async API for controlling TrackAudio programma
 
 ## Quick start
 
-Add the dependency to your `Cargo.toml`:
+Add the dependency:
 
-```toml
-[dependencies]
-trackaudio = "0.1"
+```sh
+cargo add trackaudio
 ```
 
 Connect to the default instance locally and listen for events:
@@ -345,9 +344,14 @@ match TrackAudioClient::connect_default().await {
 
 To disable default features:
 
-```toml
-[dependencies]
-trackaudio = { version = "0.1", default-features = false }
+```sh
+cargo add trackaudio --no-default-features
+```
+
+Or, to enable just one of them:
+
+```sh
+cargo add trackaudio --no-default-features --features tracing
 ```
 
 ## Minimum Supported Rust Version (MSRV)
