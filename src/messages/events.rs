@@ -505,6 +505,13 @@ pub enum ClientEvent {
 
 #[cfg(test)]
 mod tests {
+    //! Deserialization tests using payloads taken verbatim from TrackAudio's `backend/src/sdk.cpp`.
+    //!
+    //! TrackAudio emits an identical WebSocket wire format on 1.3.x and 1.4.0, so the samples below
+    //! apply to both. Fields TrackAudio only sends conditionally are modelled as `Option`, and no
+    //! payload struct uses `deny_unknown_fields`, so older instances (omitting a field) and newer
+    //! ones (adding a field) both keep deserializing.
+
     use super::*;
 
     mod rx_begin {
@@ -571,6 +578,96 @@ mod tests {
             assert_eq!(station.callsign, "ADVISORY");
             assert_eq!(station.frequency, Frequency::from_hz(122_800_000));
             assert_eq!(station.frequency_alias, None);
+        }
+    }
+
+    /// Guards the properties that keep a single client working across TrackAudio versions.
+    mod version_compatibility {
+        use super::{Event, Frequency, StationState};
+
+        /// A station monitoring 122.800 MHz is called `UNICOM` up to 1.3.x and `ADVISORY` from
+        /// 1.4.0 onwards. Both must deserialize; the callsign is passed through untouched so
+        /// consumers can match on either.
+        #[test]
+        fn unicom_and_advisory_callsigns_both_deserialize() {
+            for callsign in ["UNICOM", "ADVISORY"] {
+                let json = format!(
+                    r#"{{"type":"kStationStateUpdate","value":{{"callsign":"{callsign}","isAvailable":true,"frequency":122800000}}}}"#
+                );
+
+                let Event::StationStateUpdate(state) = serde_json::from_str(&json).unwrap() else {
+                    panic!("expected Event::StationStateUpdate");
+                };
+
+                assert_eq!(state.callsign.as_deref(), Some(callsign));
+                assert_eq!(state.frequency, Some(Frequency::from_hz(122_800_000)));
+            }
+        }
+
+        /// Older instances omit fields newer ones send. Every such field is an `Option`, so a
+        /// minimal payload must still deserialize rather than erroring.
+        #[test]
+        fn missing_optional_fields_deserialize_as_none() {
+            let json = r#"{"type":"kStationStateUpdate","value":{"isAvailable":false}}"#;
+
+            let Event::StationStateUpdate(state) = serde_json::from_str(json).unwrap() else {
+                panic!("expected Event::StationStateUpdate");
+            };
+
+            assert_eq!(
+                state,
+                StationState {
+                    callsign: None,
+                    is_available: false,
+                    frequency: None,
+                    headset: None,
+                    is_output_muted: None,
+                    output_volume: None,
+                    rx: None,
+                    tx: None,
+                    xc: None,
+                    xca: None,
+                }
+            );
+        }
+
+        /// Newer instances may add fields this crate does not model yet. No payload struct uses
+        /// `deny_unknown_fields`, so they must be ignored rather than failing the whole event.
+        #[test]
+        fn unknown_fields_are_ignored() {
+            let json = r#"{"type":"kRxBegin","value":{"callsign":"AFR001","pFrequencyHz":123000000,"activeTransmitters":["AFR001"],"somethingNew":{"rco":true}}}"#;
+
+            let Event::RxBegin(rx) = serde_json::from_str(json).unwrap() else {
+                panic!("expected Event::RxBegin");
+            };
+
+            assert_eq!(rx.callsign, "AFR001");
+            assert_eq!(rx.frequency, Frequency::from_hz(123_000_000));
+        }
+
+        /// Message types this crate does not know fall back to [`Event::Unknown`] instead of
+        /// erroring, so a newer TrackAudio cannot break an older client.
+        ///
+        /// # Known limitation
+        ///
+        /// The fallback currently only engages when `value` is absent or `null`. Because [`Event`]
+        /// is an adjacently tagged enum, serde tries to read `value` as a unit variant and rejects
+        /// an object, so an unknown event carrying a `value` object still fails to deserialize.
+        /// Every event TrackAudio actually emits carries one, so the fallback does not yet cover
+        /// the case it exists for.
+        #[test]
+        fn unknown_event_types_fall_back() {
+            for json in [
+                r#"{"type":"kSomeFutureEvent"}"#,
+                r#"{"type":"kSomeFutureEvent","value":null}"#,
+            ] {
+                assert_eq!(serde_json::from_str::<Event>(json).unwrap(), Event::Unknown);
+            }
+
+            assert!(
+                serde_json::from_str::<Event>(r#"{"type":"kSomeFutureEvent","value":{}}"#).is_err(),
+                "fallback now handles object payloads; update this test and the docs on Event::Unknown"
+            );
         }
     }
 }
