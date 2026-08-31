@@ -38,20 +38,17 @@ use std::time::Duration;
 ///
 /// - TrackAudio's outgoing messages SDK documentation can be found on
 ///   [GitHub](https://github.com/pierr3/TrackAudio/wiki/SDK-documentation#outgoing-messages).
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(tag = "type", content = "value")]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Event {
     /// Voice connection state changed.
     ///
     /// Emitted when the connection to the voice server is established or lost.
-    #[serde(rename = "kVoiceConnectedState")]
     VoiceConnectedState(VoiceConnectedState),
 
     /// Station added.
     ///
     /// Emitted when a new station is successfully added to TrackAudio, e.g., as a response to
     /// [`Command::AddStation`].
-    #[serde(rename = "kStationAdded")]
     StationAdded(StationAdded),
 
     /// A (monitored) station's state has been updated.
@@ -59,54 +56,46 @@ pub enum Event {
     /// Emitted when any property of a station changes (e.g., rx/tx/xc state, volume, etc.), or
     /// after a station is added or removed from the instance. Emitted as a response to
     /// [`Command::AddStation`], including the info whether the station was found.
-    #[serde(rename = "kStationStateUpdate")]
     StationStateUpdate(StationState),
 
     /// An (unassociated) Frequency has been removed.
     ///
     /// Emitted when a manually tuned frequency (without a station) is removed from TrackAudio.
-    #[serde(rename = "kFrequencyRemoved")]
     FrequencyRemoved(FrequencyRemoved),
 
     /// Full state snapshot of all stations.
     ///
     /// Emitted as a response to [`Command::GetStationState`], containing a list of all stations
     /// currently monitored by TrackAudio.
-    #[serde(rename = "kStationStates")]
     StationStates(StationStates),
 
     /// Transmission started on one or more frequencies.
     ///
     /// Emitted when the user begins transmitting (either by pressing their PTT button or as
     /// a response to a [`Command::PttPressed`]).
-    #[serde(rename = "kTxBegin")]
     TxBegin(TxBegin),
 
     /// Transmission ended on one or more frequencies.
     ///
     /// Emitted when the user finishes transmitting (either by releasing their PTT button or as
     /// a response to [`Command::PttReleased`]).
-    #[serde(rename = "kTxEnd")]
     TxEnd(TxEnd),
 
     /// Started receiving transmission on one or more frequencies.
     ///
     /// Emitted when another station begins transmitting on a monitored frequency.
-    #[serde(rename = "kRxBegin")]
     RxBegin(RxBegin),
 
     /// Stopped receiving transmission on one or more frequencies.
     ///
     /// Emitted when another station stops transmitting on a monitored frequency. Contains a list of
     /// stations still transmitting on frequency (in the case of simultaneous transmissions).
-    #[serde(rename = "kRxEnd")]
     RxEnd(RxEnd),
 
     /// The main volume level changed.
     ///
     /// Emitted when the user adjusts the main volume (either by using the volume slider in the
     /// client or as a response to [`Command::ChangeMainVolume`]).
-    #[serde(rename = "kMainVolumeChange")]
     MainVolumeChange(MainVolumeChange),
 
     /// Frequency state update (deprecated).
@@ -115,7 +104,6 @@ pub enum Event {
     ///
     /// This event is deprecated by TrackAudio and only emitted for backwards
     /// compatibility. Use [`Event::StationStateUpdate`] instead.
-    #[serde(rename = "kFrequencyStateUpdate")]
     #[deprecated(
         since = "0.1.0",
         note = "This event is deprecated by TrackAudio and only emitted for backwards compatibility. Use StationStateUpdate instead."
@@ -127,14 +115,71 @@ pub enum Event {
     ///
     /// These events are generated locally and not deserialized from JSON, but are used to
     /// communicate the [`TrackAudioClient`](crate::TrackAudioClient)'s current (internal) state.
-    #[serde(skip)]
     Client(ClientEvent),
 
     /// Unknown or unrecognized event type.
     ///
-    /// Used as a fallback for forward compatibility when new event types are added.
-    #[serde(other)]
-    Unknown,
+    /// Used as a fallback for forward compatibility: an event whose `type` this crate does not
+    /// know is captured here rather than failing to deserialize, so a newer TrackAudio release
+    /// cannot break an older client. The raw message is preserved so consumers can log or
+    /// inspect it.
+    ///
+    /// Note that this only covers *unrecognized* event types. An event with a known type but a
+    /// malformed payload is still a deserialization error, surfaced as
+    /// [`ClientEvent::EventDeserializationFailed`].
+    Unknown {
+        /// The raw `type` field of the message, e.g. `"kSomeFutureEvent"`.
+        msg_type: String,
+
+        /// The raw `value` field of the message, or [`serde_json::Value::Null`] if absent.
+        value: serde_json::Value,
+    },
+}
+
+impl<'de> Deserialize<'de> for Event {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        /// The `{ "type": ..., "value": ... }` envelope every TrackAudio message uses.
+        #[derive(Deserialize)]
+        struct Envelope {
+            #[serde(rename = "type")]
+            msg_type: String,
+
+            #[serde(default)]
+            value: serde_json::Value,
+        }
+
+        /// Decodes an event's `value` payload, tagging the error with the message type so a
+        /// malformed payload is distinguishable from an unrelated parse failure.
+        fn payload<T, E>(msg_type: &str, value: serde_json::Value) -> Result<T, E>
+        where
+            T: serde::de::DeserializeOwned,
+            E: serde::de::Error,
+        {
+            serde_json::from_value(value)
+                .map_err(|err| E::custom(format_args!("invalid `value` for {msg_type}: {err}")))
+        }
+
+        let Envelope { msg_type, value } = Envelope::deserialize(deserializer)?;
+
+        Ok(match msg_type.as_str() {
+            "kVoiceConnectedState" => Self::VoiceConnectedState(payload(&msg_type, value)?),
+            "kStationAdded" => Self::StationAdded(payload(&msg_type, value)?),
+            "kStationStateUpdate" => Self::StationStateUpdate(payload(&msg_type, value)?),
+            "kFrequencyRemoved" => Self::FrequencyRemoved(payload(&msg_type, value)?),
+            "kStationStates" => Self::StationStates(payload(&msg_type, value)?),
+            "kTxBegin" => Self::TxBegin(payload(&msg_type, value)?),
+            "kTxEnd" => Self::TxEnd(payload(&msg_type, value)?),
+            "kRxBegin" => Self::RxBegin(payload(&msg_type, value)?),
+            "kRxEnd" => Self::RxEnd(payload(&msg_type, value)?),
+            "kMainVolumeChange" => Self::MainVolumeChange(payload(&msg_type, value)?),
+            #[allow(deprecated)]
+            "kFrequencyStateUpdate" => Self::FrequencyStateUpdate(payload(&msg_type, value)?),
+            _ => Self::Unknown { msg_type, value },
+        })
+    }
 }
 
 /// Voice connection state payload.
@@ -646,27 +691,49 @@ mod tests {
         }
 
         /// Message types this crate does not know fall back to [`Event::Unknown`] instead of
-        /// erroring, so a newer TrackAudio cannot break an older client.
-        ///
-        /// # Known limitation
-        ///
-        /// The fallback currently only engages when `value` is absent or `null`. Because [`Event`]
-        /// is an adjacently tagged enum, serde tries to read `value` as a unit variant and rejects
-        /// an object, so an unknown event carrying a `value` object still fails to deserialize.
-        /// Every event TrackAudio actually emits carries one, so the fallback does not yet cover
-        /// the case it exists for.
+        /// erroring, so a newer TrackAudio cannot break an older client. The raw message is
+        /// preserved so consumers can log what they received.
         #[test]
         fn unknown_event_types_fall_back() {
+            let json = r#"{"type":"kSomeFutureEvent","value":{"whatever":1}}"#;
+
+            assert_eq!(
+                serde_json::from_str::<Event>(json).unwrap(),
+                Event::Unknown {
+                    msg_type: "kSomeFutureEvent".to_string(),
+                    value: serde_json::json!({"whatever": 1}),
+                }
+            );
+        }
+
+        /// An unknown event without a `value` is still recognized, with a null payload.
+        #[test]
+        fn unknown_event_types_without_value() {
             for json in [
                 r#"{"type":"kSomeFutureEvent"}"#,
                 r#"{"type":"kSomeFutureEvent","value":null}"#,
             ] {
-                assert_eq!(serde_json::from_str::<Event>(json).unwrap(), Event::Unknown);
+                assert_eq!(
+                    serde_json::from_str::<Event>(json).unwrap(),
+                    Event::Unknown {
+                        msg_type: "kSomeFutureEvent".to_string(),
+                        value: serde_json::Value::Null,
+                    }
+                );
             }
+        }
 
+        /// A *known* event type with a malformed payload must still be an error, so real protocol
+        /// breakage surfaces as [`ClientEvent::EventDeserializationFailed`] rather than being
+        /// silently swallowed into [`Event::Unknown`].
+        #[test]
+        fn known_event_with_bad_payload_still_errors() {
+            let json = r#"{"type":"kRxBegin","value":{"callsign":42}}"#;
+
+            let err = serde_json::from_str::<Event>(json).unwrap_err().to_string();
             assert!(
-                serde_json::from_str::<Event>(r#"{"type":"kSomeFutureEvent","value":{}}"#).is_err(),
-                "fallback now handles object payloads; update this test and the docs on Event::Unknown"
+                err.contains("kRxBegin"),
+                "error should name the message type: {err}"
             );
         }
     }

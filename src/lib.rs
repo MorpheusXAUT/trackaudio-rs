@@ -316,6 +316,12 @@ pub use client::TrackAudioClient;
 pub use config::TrackAudioConfig;
 pub use messages::{ClientEvent, Command, ConnectionState, DisconnectReason, Event, Frequency};
 
+/// Re-export of the [`serde_json`] version this crate is built against.
+///
+/// [`Event::Unknown`] exposes a [`serde_json::Value`], so consumers inspecting it can do so
+/// without adding their own `serde_json` dependency and risking a version mismatch.
+pub use serde_json;
+
 /// The crate's `Result` type, used throughout the library to indicate success or failure.
 ///
 /// This type is a convenient alias for `std::result::Result` where the error type is
