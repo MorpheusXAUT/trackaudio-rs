@@ -262,6 +262,9 @@ async fn main() -> trackaudio::Result<()> {
 
     let client = TrackAudioClient::connect(config).await?;
 
+    // `connect` returns before the connection is up; wait for it if you need it ready
+    client.wait_connected(Some(Duration::from_secs(5))).await?;
+
     // Monitor connection state changes
     let mut events = client.subscribe();
     tokio::spawn(async move {
@@ -284,7 +287,7 @@ async fn main() -> trackaudio::Result<()> {
     });
 
     // Manually trigger reconnection if needed
-    client.reconnect().await?;
+    client.reconnect()?;
 
     Ok(())
 }
