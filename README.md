@@ -354,6 +354,10 @@ trackaudio = { version = "0.1", default-features = false }
 
 This crate requires Rust 1.85 or later.
 
+## TrackAudio compatibility
+
+Verified against TrackAudio 1.3.3 and 1.4.0, whose WebSocket SDK protocol is identical.
+
 ## License
 
 The `trackaudio` project and all its crates and packages are dual-licensed as

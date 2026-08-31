@@ -152,12 +152,27 @@ pub struct VoiceConnectedState {
 ///
 /// Emitted in response to [`Command::AddStation`].
 #[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct StationAdded {
     /// The callsign of the station.
+    ///
+    /// # Notes
+    ///
+    /// - TrackAudio 1.4.0 renamed the station monitoring 122.800 MHz from `UNICOM` to `ADVISORY`.
+    ///   Consumers matching on this callsign need to handle both spellings to stay compatible
+    ///   across TrackAudio versions.
     pub callsign: String,
 
     /// The frequency the station is tuned to.
     pub frequency: Frequency,
+
+    /// The station's alias frequency, if it has one.
+    ///
+    /// Alias frequencies are used for HF stations, where the frequency the controller is tuned to
+    /// differs from the one published to pilots. Only sent by TrackAudio when the station actually
+    /// has an alias.
+    #[serde(default)]
+    pub frequency_alias: Option<Frequency>,
 }
 
 /// Station state information.
@@ -176,6 +191,12 @@ pub struct StationState {
     ///
     /// When manually tuning a frequency (not available via API), `callsign` will be `None`. All
     /// later updates will have the callsign `Some("MANUAL")` for manually tuned frequencies.
+    ///
+    /// # Notes
+    ///
+    /// - TrackAudio 1.4.0 renamed the station monitoring 122.800 MHz from `UNICOM` to `ADVISORY`.
+    ///   Consumers matching on this callsign need to handle both spellings to stay compatible
+    ///   across TrackAudio versions.
     pub callsign: Option<String>,
 
     /// Whether the station is available (found in the VATSIM audio database). If `false`, all
@@ -267,6 +288,20 @@ pub struct RxBegin {
     /// The frequency on which the transmission is occurring.
     #[serde(rename = "pFrequencyHz")]
     pub frequency: Frequency,
+
+    /// List of callsigns currently transmitting on this frequency, if any.
+    ///
+    /// Used to handle cases of simultaneous transmissions on the same frequency. Includes the
+    /// station reported by [`callsign`](Self::callsign).
+    ///
+    /// # Notes
+    ///
+    /// - TrackAudio's SDK documentation omits this field for `kRxBegin`, but it has been sent
+    ///   alongside `kRxEnd` since at least TrackAudio 1.3.3. As of 1.4.0, `kRxBegin` is only
+    ///   emitted when TrackAudio has the list available, so this is expected to be `Some` in
+    ///   practice.
+    #[serde(default, rename = "activeTransmitters")]
+    pub active_transmitters: Option<Vec<String>>,
 }
 
 /// Reception end event payload.
@@ -466,4 +501,76 @@ pub enum ClientEvent {
         /// The error message describing the deserialization failure.
         error: String,
     },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    mod rx_begin {
+        use super::{Event, Frequency};
+
+        #[test]
+        fn with_active_transmitters() {
+            let json = r#"{"type":"kRxBegin","value":{"callsign":"AFR001","pFrequencyHz":123000000,"activeTransmitters":["AFR001","DLH456"]}}"#;
+
+            let Event::RxBegin(rx) = serde_json::from_str(json).unwrap() else {
+                panic!("expected Event::RxBegin");
+            };
+
+            assert_eq!(rx.callsign, "AFR001");
+            assert_eq!(rx.frequency, Frequency::from_hz(123_000_000));
+            assert_eq!(
+                rx.active_transmitters,
+                Some(vec!["AFR001".to_string(), "DLH456".to_string()])
+            );
+        }
+
+        #[test]
+        fn without_active_transmitters() {
+            let json =
+                r#"{"type":"kRxBegin","value":{"callsign":"AFR001","pFrequencyHz":123000000}}"#;
+
+            let Event::RxBegin(rx) = serde_json::from_str(json).unwrap() else {
+                panic!("expected Event::RxBegin");
+            };
+
+            assert_eq!(rx.callsign, "AFR001");
+            assert_eq!(rx.active_transmitters, None);
+        }
+    }
+
+    mod station_added {
+        use super::{Event, Frequency};
+
+        #[test]
+        fn with_frequency_alias() {
+            let json = r#"{"type":"kStationAdded","value":{"callsign":"EDDF_S_TWR","frequency":118775000,"frequencyAlias":128775000}}"#;
+
+            let Event::StationAdded(station) = serde_json::from_str(json).unwrap() else {
+                panic!("expected Event::StationAdded");
+            };
+
+            assert_eq!(station.callsign, "EDDF_S_TWR");
+            assert_eq!(station.frequency, Frequency::from_hz(118_775_000));
+            assert_eq!(
+                station.frequency_alias,
+                Some(Frequency::from_hz(128_775_000))
+            );
+        }
+
+        #[test]
+        fn without_frequency_alias() {
+            let json =
+                r#"{"type":"kStationAdded","value":{"callsign":"ADVISORY","frequency":122800000}}"#;
+
+            let Event::StationAdded(station) = serde_json::from_str(json).unwrap() else {
+                panic!("expected Event::StationAdded");
+            };
+
+            assert_eq!(station.callsign, "ADVISORY");
+            assert_eq!(station.frequency, Frequency::from_hz(122_800_000));
+            assert_eq!(station.frequency_alias, None);
+        }
+    }
 }
