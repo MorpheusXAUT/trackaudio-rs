@@ -130,6 +130,55 @@ jobs:
       - name: Tests
         run: cargo test --locked --all-targets --all-features
 
+      # `--all-targets` excludes doctests, so they need their own invocation.
+      - name: Doc tests
+        run: cargo test --locked --doc --all-features
+
+  features:
+    name: features (${{ matrix.name }})
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: none
+            flags: "--no-default-features"
+          - name: tracing
+            flags: "--no-default-features --features tracing"
+          - name: reconnect-jitter
+            flags: "--no-default-features --features reconnect-jitter"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Rust toolchain (stable)
+        run: |
+          rustup toolchain install stable --profile minimal --no-self-update --component clippy
+          rustup default stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: features-${{ matrix.name }}
+
+      - name: Clippy
+        run: cargo clippy --locked --all-targets ${{ matrix.flags }} -- -D warnings
+
+      - name: Tests
+        run: cargo test --locked --all-targets ${{ matrix.flags }}
+
+      - name: Doc tests
+        run: cargo test --locked --doc ${{ matrix.flags }}
+
   zizmor:
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -168,7 +217,7 @@ jobs:
     name: "CI ✓"
     # `changes` is listed so a failure there (which skips the rust jobs) fails the
     # gate instead of green-lighting a PR that ran no checks.
-    needs: [changes, cargo-deny, check, zizmor, dependency-review]
+    needs: [changes, cargo-deny, check, features, zizmor, dependency-review]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -179,6 +228,7 @@ jobs:
           CHANGES_RESULT: ${{ needs.changes.result }}
           CARGO_DENY_RESULT: ${{ needs.cargo-deny.result }}
           CHECK_RESULT: ${{ needs.check.result }}
+          FEATURES_RESULT: ${{ needs.features.result }}
           ZIZMOR_RESULT: ${{ needs.zizmor.result }}
           DEPENDENCY_REVIEW_RESULT: ${{ needs.dependency-review.result }}
         run: |
@@ -191,7 +241,7 @@ jobs:
             echo "changes: $CHANGES_RESULT"
           fi
 
-          for name in cargo_deny check zizmor dependency_review; do
+          for name in cargo_deny check features zizmor dependency_review; do
             var="${name^^}_RESULT"
             result="${!var}"
             case "$result" in
@@ -214,6 +264,7 @@ jobs:
         env:
           CARGO_DENY_RESULT: ${{ needs.cargo-deny.result }}
           CHECK_RESULT: ${{ needs.check.result }}
+          FEATURES_RESULT: ${{ needs.features.result }}
           ZIZMOR_RESULT: ${{ needs.zizmor.result }}
           DEPENDENCY_REVIEW_RESULT: ${{ needs.dependency-review.result }}
         run: |
@@ -225,5 +276,6 @@ jobs:
           echo "|-----|--------|" >> $GITHUB_STEP_SUMMARY
           echo "| cargo deny | $(icon "$CARGO_DENY_RESULT") $CARGO_DENY_RESULT |" >> $GITHUB_STEP_SUMMARY
           echo "| check | $(icon "$CHECK_RESULT") $CHECK_RESULT |" >> $GITHUB_STEP_SUMMARY
+          echo "| features | $(icon "$FEATURES_RESULT") $FEATURES_RESULT |" >> $GITHUB_STEP_SUMMARY
           echo "| zizmor | $(icon "$ZIZMOR_RESULT") $ZIZMOR_RESULT |" >> $GITHUB_STEP_SUMMARY
           echo "| Dependency review | $(icon "$DEPENDENCY_REVIEW_RESULT") $DEPENDENCY_REVIEW_RESULT |" >> $GITHUB_STEP_SUMMARY
