@@ -33,20 +33,31 @@ struct Inner {
 }
 
 impl TrackAudioClient {
-    /// Returns a new [`TrackAudioClient`] using the provided configuration.
-    /// This method automatically establishes a connection to the configured TrackAudio instance.
+    /// Returns a new [`TrackAudioClient`] using the provided configuration and starts connecting
+    /// to the configured TrackAudio instance.
     ///
     /// After connecting, you can send commands to TrackAudio using [`TrackAudioClient::send()`]
     /// and subscribe to the (raw) stream of events emitted using [`TrackAudioClient::subscribe()`].
     ///
+    /// # Connection is established in the background
+    ///
+    /// This method returns as soon as the client task is spawned; it does **not** wait for the
+    /// WebSocket connection to come up, and a returned client is therefore not yet known to be
+    /// connected. Commands sent before the connection is up are queued, not rejected.
+    ///
+    /// To observe the actual connection state, subscribe with [`TrackAudioClient::subscribe()`]
+    /// and watch for [`ClientEvent::ConnectionStateChanged`], which reports
+    /// [`ConnectionState::Connected`] once the connection succeeds and
+    /// [`ConnectionState::Disconnected`] (with a [`DisconnectReason`]) when it fails.
+    ///
     /// # Returns
-    /// - `Ok(Self)`: Indicates successful connection and initialization of the TrackAudio client.
-    /// - `Err(TrackAudioError)`: Returns an error if the connection fails (e.g., network issues or invalid configuration).
+    /// - `Ok(Self)`: The client, with its background task spawned.
     ///
     /// # Errors
-    /// - [`TrackAudioError::Websocket`](TrackAudioError::WebSocket): If the WebSocket connection failed
-    // `async` without an `.await`: connecting happens in the spawned task, but the signature is
-    // part of the public API and matches `connect_default`/`connect_url`, so it stays.
+    /// This method is currently infallible and always returns `Ok`; connection failures are
+    /// reported as events rather than returned here. It returns [`Result`] so that failures
+    /// detectable up front can be surfaced without a breaking change.
+    // Connecting happens in the spawned task, but `async` is public API here.
     #[allow(clippy::unused_async, clippy::unused_async_trait_impl)]
     #[cfg_attr(feature = "tracing", tracing::instrument(err))]
     pub async fn connect(config: TrackAudioConfig) -> Result<Self> {
@@ -82,12 +93,15 @@ impl TrackAudioClient {
     /// parameters, which are retrieved via the [`TrackAudioConfig::default()`] method.
     /// This will attempt to establish a connection to `ws://127.0.0.1:49080/ws`.
     ///
+    /// As with [`connect`](Self::connect), this returns before the connection is established;
+    /// see that method for how to observe the real connection state.
+    ///
     /// # Returns
-    /// - `Ok(Self)`: If connection to TrackAudio was established successfully
-    /// - `Err(TrackAudioError)`: If connecting to TrackAudio failed
+    /// - `Ok(Self)`: The client, with its background task spawned.
     ///
     /// # Errors
-    /// - [`TrackAudioError::WebSocket`]: If the WebSocket connection failed
+    /// This method is currently infallible and always returns `Ok`; connection failures are
+    /// reported as events rather than returned here.
     pub async fn connect_default() -> Result<Self> {
         #[cfg(feature = "tracing")]
         tracing::trace!("Connecting to default TrackAudio URL");
@@ -101,13 +115,15 @@ impl TrackAudioClient {
     /// After connecting, you can send commands to TrackAudio using [`TrackAudioClient::send()`]
     /// and subscribe to the (raw) stream of events emitted using [`TrackAudioClient::subscribe()`].
     ///
+    /// As with [`connect`](Self::connect), this returns before the connection is established;
+    /// see that method for how to observe the real connection state.
+    ///
     /// # Returns
-    /// - `Ok(Self)`: If the connection to TrackAudio was established successfully
-    /// - `Err(TrackAudioError)`: If connecting to TrackAudio failed
+    /// - `Ok(Self)`: The client, with its background task spawned.
     ///
     /// # Errors
-    /// - [`TrackAudioError::InvalidUrl`]: If the provided URL is invalid.
-    /// - [`TrackAudioError::WebSocket`]: If the WebSocket connection failed.
+    /// - [`TrackAudioError::InvalidUrl`]: If the provided URL is invalid. This is the only
+    ///   failure reported here; connection failures are reported as events.
     pub async fn connect_url(endpoint: impl AsRef<str>) -> Result<Self> {
         Self::connect(TrackAudioConfig::new(endpoint)?).await
     }
@@ -164,6 +180,17 @@ impl TrackAudioClient {
     /// - [`TrackAudioError::Timeout`]: If the operation times out.
     /// - [`TrackAudioError::Send`]: If an error occurs while sending the command.
     /// - [`TrackAudioError::Receive`]: If an error occurs while receiving events.
+    ///
+    /// # Correlation
+    ///
+    /// TrackAudio's protocol has no request identifiers, so a response cannot be tied back to the
+    /// command that caused it. This method resolves on the **first** event the `filter` accepts,
+    /// whoever caused it. Events TrackAudio broadcasts to every connected client, such as a volume
+    /// change the user makes with the on-screen slider, can therefore resolve a pending
+    /// call, as can the response to a concurrent identical request from this same client. Filters
+    /// that can match on a callsign or frequency narrow this considerably; those for commands
+    /// carrying no such key (e.g. [`Command::ChangeMainVolume`]) cannot. Avoid issuing
+    /// several indistinguishable requests concurrently on one connection.
     #[cfg_attr(feature = "tracing", tracing::instrument(skip(self, filter), err))]
     pub async fn send_and_await<R, F>(
         &self,
@@ -274,7 +301,9 @@ impl TrackAudioClient {
     /// # Notes
     ///
     /// - This method reflects the "request → event stream → matching response" model
-    ///   of the protocol.
+    ///   of the protocol. It resolves on the first matching event, which is not necessarily a
+    ///   response to *this* request; see the `Correlation` section on
+    ///   [`send_and_await`](Self::send_and_await).
     /// - For many common protocol operations, you may prefer the convenience methods
     ///   provided by [`TrackAudioApi`](crate::TrackAudioApi) (e.g. `add_station`, `get_station_state`,
     ///   etc.).
@@ -311,6 +340,13 @@ impl TrackAudioClient {
     }
 
     /// Forcefully terminates the client task and disconnects from the TrackAudio instance.
+    ///
+    /// # Notes
+    /// - [`TrackAudioClient`] is [`Clone`] and every clone shares one background task. Taking
+    ///   `self` by value therefore does *not* imply exclusive ownership: terminating through one
+    ///   clone aborts the task for all of them, and any surviving clone will fail every
+    ///   subsequent [`send`](Self::send). Prefer [`shutdown`](Self::shutdown) unless you
+    ///   specifically need to abort the task without letting it close the connection cleanly.
     pub fn terminate(self) {
         #[cfg(feature = "tracing")]
         tracing::debug!("Termination requested");

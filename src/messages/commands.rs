@@ -185,15 +185,14 @@ impl Request for AddStation {
             return None;
         };
         match event {
-            // A station TrackAudio already monitors is answered directly with its full state.
             Event::StationStateUpdate(state)
                 if state.callsign.as_ref().is_some_and(|c| c == callsign) =>
             {
                 Some(state.clone())
             }
-            // A station that had to be looked up is answered with `kStationAdded`, which carries
-            // only the callsign and frequency. This is the direct response and arrives first, so
-            // the remaining fields are reported as unknown rather than waited for.
+            // A looked-up station is answered with `kStationAdded`, which arrives before any
+            // state update and carries only these fields. `frequency_alias` is dropped because
+            // `StationState` has nowhere to put it.
             Event::StationAdded(added) if &added.callsign == callsign => Some(StationState {
                 callsign: Some(added.callsign.clone()),
                 is_available: true,
@@ -393,6 +392,8 @@ pub struct ChangeStationVolume {
 }
 
 impl ChangeStationVolume {
+    /// Creates a new [`ChangeStationVolume`] command, clamping `amount` to the range -100..=100.
+    #[must_use]
     pub fn new(frequency: impl Into<Frequency>, amount: i8) -> Self {
         Self {
             frequency: frequency.into(),
@@ -784,8 +785,7 @@ mod tests {
             assert_eq!(extracted, state);
         }
 
-        /// A station TrackAudio had to look up is answered with `kStationAdded`, which carries
-        /// only the callsign and frequency.
+        /// A looked-up station is answered with `kStationAdded`, which is sparser.
         #[test]
         fn resolves_from_station_added() {
             let event = Event::StationAdded(StationAdded {
