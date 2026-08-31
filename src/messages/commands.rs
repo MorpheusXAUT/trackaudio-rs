@@ -138,6 +138,23 @@ pub enum Command {
 ///
 /// This command implements the [`Request`] trait and can be used in a request-response pattern.
 ///
+/// # Responses
+///
+/// Which event resolves the request, and therefore how complete the returned
+/// [`StationState`] is, depends on what TrackAudio has to do:
+///
+/// - **Station already monitored**: answered immediately with [`Event::StationStateUpdate`],
+///   carrying the station's full current state.
+/// - **Station looked up and added**: answered with [`Event::StationAdded`], which carries only
+///   the callsign and frequency. The remaining fields are [`None`]; follow up with
+///   [`GetStationState`] if the full state is needed.
+///
+/// # Unknown callsigns
+///
+/// If TrackAudio cannot find the callsign, it reports the failure to its own UI and sends
+/// **nothing** over the WebSocket connection. There is no event to wait for, so a request for an
+/// unknown callsign never resolves. Always pass a timeout.
+///
 /// Furthermore, the [`TrackAudioApi`](crate::TrackAudioApi) provides a convenience wrapper
 /// [`add_station`](crate::TrackAudioApi::add_station), which can be used to easily add a station
 /// and await the associated response from TrackAudio.
@@ -168,11 +185,27 @@ impl Request for AddStation {
             return None;
         };
         match event {
+            // A station TrackAudio already monitors is answered directly with its full state.
             Event::StationStateUpdate(state)
                 if state.callsign.as_ref().is_some_and(|c| c == callsign) =>
             {
                 Some(state.clone())
             }
+            // A station that had to be looked up is answered with `kStationAdded`, which carries
+            // only the callsign and frequency. This is the direct response and arrives first, so
+            // the remaining fields are reported as unknown rather than waited for.
+            Event::StationAdded(added) if &added.callsign == callsign => Some(StationState {
+                callsign: Some(added.callsign.clone()),
+                is_available: true,
+                frequency: Some(added.frequency),
+                headset: None,
+                is_output_muted: None,
+                output_volume: None,
+                rx: None,
+                tx: None,
+                xc: None,
+                xca: None,
+            }),
             _ => None,
         }
     }
@@ -717,6 +750,90 @@ impl BoolOrToggle {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    mod add_station {
+        use super::{AddStation, Command, Request};
+        use crate::Frequency;
+        use crate::messages::events::{StationAdded, StationState};
+        use crate::{Event, messages::events::VoiceConnectedState};
+
+        fn cmd() -> Command {
+            Command::AddStation(AddStation {
+                callsign: "LOVV_CTR".to_string(),
+            })
+        }
+
+        /// A station TrackAudio already monitors is answered with its full state.
+        #[test]
+        fn resolves_from_station_state_update() {
+            let state = StationState {
+                callsign: Some("LOVV_CTR".to_string()),
+                is_available: true,
+                frequency: Some(Frequency::from_mhz(134.350)),
+                headset: Some(true),
+                is_output_muted: Some(false),
+                output_volume: Some(100.0),
+                rx: Some(true),
+                tx: Some(false),
+                xc: Some(false),
+                xca: Some(false),
+            };
+
+            let extracted =
+                AddStation::extract(&Event::StationStateUpdate(state.clone()), &cmd()).unwrap();
+            assert_eq!(extracted, state);
+        }
+
+        /// A station TrackAudio had to look up is answered with `kStationAdded`, which carries
+        /// only the callsign and frequency.
+        #[test]
+        fn resolves_from_station_added() {
+            let event = Event::StationAdded(StationAdded {
+                callsign: "LOVV_CTR".to_string(),
+                frequency: Frequency::from_mhz(134.350),
+                frequency_alias: None,
+            });
+
+            let extracted = AddStation::extract(&event, &cmd()).unwrap();
+            assert_eq!(extracted.callsign.as_deref(), Some("LOVV_CTR"));
+            assert_eq!(extracted.frequency, Some(Frequency::from_mhz(134.350)));
+            assert!(extracted.is_available);
+            assert_eq!(extracted.rx, None);
+            assert_eq!(extracted.tx, None);
+        }
+
+        /// Neither event resolves the request when it names a different station.
+        #[test]
+        fn ignores_other_callsigns() {
+            let added = Event::StationAdded(StationAdded {
+                callsign: "EDDF_TWR".to_string(),
+                frequency: Frequency::from_mhz(119.900),
+                frequency_alias: None,
+            });
+            assert_eq!(AddStation::extract(&added, &cmd()), None);
+
+            let update = Event::StationStateUpdate(StationState {
+                callsign: Some("EDDF_TWR".to_string()),
+                is_available: true,
+                frequency: Some(Frequency::from_mhz(119.900)),
+                headset: None,
+                is_output_muted: None,
+                output_volume: None,
+                rx: None,
+                tx: None,
+                xc: None,
+                xca: None,
+            });
+            assert_eq!(AddStation::extract(&update, &cmd()), None);
+        }
+
+        /// Unrelated event types never resolve the request.
+        #[test]
+        fn ignores_unrelated_events() {
+            let event = Event::VoiceConnectedState(VoiceConnectedState { connected: true });
+            assert_eq!(AddStation::extract(&event, &cmd()), None);
+        }
+    }
 
     mod bool_or_toggle {
         use super::BoolOrToggle;
